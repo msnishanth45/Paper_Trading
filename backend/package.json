@@ -7,7 +7,11 @@
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "keywords": ["paper-trading", "upstox", "express"],
+  "keywords": [
+    "paper-trading",
+    "upstox",
+    "express"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
@@ -15,9 +19,12 @@
     "@supabase/supabase-js": "^2.99.3",
     "axios": "^1.13.6",
     "cors": "^2.8.6",
+    "csv-parse": "^6.2.1",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "ioredis": "^5.10.1",
     "protobufjs": "^8.0.0",
+    "socket.io": "^4.8.3",
     "ws": "^8.20.0"
   }
 }

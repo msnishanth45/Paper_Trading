@@ -33,4 +33,43 @@ const sellOrder = asyncHandler(async (req, res) => {
   res.status(status).json(result);
 });
 
-module.exports = { buyOrder, sellOrder };
+const supabase = require("../config/supabase");
+
+const getOpenPositions = async (req, res) => {
+
+  try {
+
+    const { userId } = req.params;
+
+    const { data, error } = await supabase
+      .from("positions")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", "OPEN");
+
+    if (error) {
+      return res.json({
+        success: false,
+        message: error.message
+      });
+    }
+
+    res.json({
+      success: true,
+      positions: data
+    });
+
+  } catch (err) {
+
+    res.json({
+      success: false,
+      message: "Server error"
+    });
+
+  }
+
+};
+
+module.exports.getOpenPositions = getOpenPositions;
+
+module.exports = { buyOrder, sellOrder, getOpenPositions};

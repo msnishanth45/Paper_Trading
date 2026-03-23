@@ -1,42 +1,24 @@
 /* ═══════════════════════════════════════════════════
-   Paper Trading Backend — Entry Point
+   Paper Trading Backend — Entry Point (v3.0)
+   
+   Production-grade server with:
+   • Socket.IO real-time push
+   • Dynamic instrument resolution
+   • Auto-start market feed from env token
    ═══════════════════════════════════════════════════ */
 
-const { PORT, SL_TARGET_INTERVAL, LIMIT_ORDER_INTERVAL } = require("./config/env");
+const http = require("http");
+const { PORT, SL_TARGET_INTERVAL, LIMIT_ORDER_INTERVAL, UPSTOX_ACCESS_TOKEN } = require("./config/env");
 const express = require("express");
 const cors = require("cors");
 const logger = require("./utils/logger");
-
-const priceCache = require("./utils/priceCache");   // ⭐ IMPORTANT
+const socketService = require("./services/socketService");
 
 /* ── Express App ── */
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-/* ⭐ TEMP PRICE INJECTION API (SIMULATION MODE ONLY) */
-
-app.post("/api/set-price", (req, res) => {
-
-  const { symbol, price } = req.body;
-
-  if (!symbol || !price) {
-    return res.json({
-      success: false,
-      message: "symbol & price required"
-    });
-  }
-
-  priceCache.set(symbol, Number(price));   // ⭐ CORRECT ENGINE INJECTION
-
-  res.json({
-    success: true,
-    message: "Price Injected Successfully",
-    price: priceCache.get(symbol)
-  });
-
-});
 
 /* ── Routes ── */
 
@@ -48,6 +30,7 @@ app.use("/api", require("./routes/limitOrderRoutes"));
 app.use("/api", require("./routes/portfolioRoutes"));
 app.use("/api", require("./routes/tradeRoutes"));
 app.use("/api", require("./routes/userRoutes"));
+app.use("/api", require("./routes/feedRoutes"));
 
 /* ── Health Check ── */
 
@@ -55,7 +38,15 @@ app.get("/", (req, res) => {
   res.json({
     status: "running",
     service: "Paper Trading Backend",
-    version: "2.0.0",
+    version: "3.0.0",
+    features: [
+      "Dynamic Instrument Resolution",
+      "Upstox WS v3 Full Feed",
+      "Heartbeat Timeout Detection",
+      "Socket.IO Real-time Push",
+      "Optional Redis Cache",
+      "Structured Logging",
+    ],
   });
 });
 
@@ -69,22 +60,38 @@ app.use((err, req, res, _next) => {
   });
 });
 
+/* ── Create HTTP Server (for Socket.IO) ── */
+
+const httpServer = http.createServer(app);
+
 /* ── Start Server ── */
 
-const server = app.listen(PORT, async () => {
+httpServer.listen(PORT, async () => {
 
   logger.success(`Server running on port ${PORT}`);
 
-  const priceEngine = require("./engines/priceEngine");
-  await priceEngine.start();
+  // Initialize Socket.IO
+  socketService.init(httpServer);
 
+  // Start price engine
+  const priceEngine = require("./engines/priceEngine");
+
+  // Auto-set token from env if available
+  if (UPSTOX_ACCESS_TOKEN) {
+    logger.success("[SERVER] Auto-setting Upstox token from env");
+    await priceEngine.setToken(UPSTOX_ACCESS_TOKEN);
+  } else {
+    await priceEngine.start();
+  }
+
+  // Start background jobs
   const { startSlTargetJob } = require("./jobs/slTargetJob");
   const { startLimitOrderJob } = require("./jobs/limitOrderJob");
 
   startSlTargetJob(SL_TARGET_INTERVAL);
   startLimitOrderJob(LIMIT_ORDER_INTERVAL);
 
-  logger.success("All systems initialized");
+  logger.success("All systems initialized ✓");
 
 });
 
@@ -102,7 +109,7 @@ function shutdown(signal) {
   stopSlTargetJob();
   stopLimitOrderJob();
 
-  server.close(() => {
+  httpServer.close(() => {
     logger.info("Server closed");
     process.exit(0);
   });
