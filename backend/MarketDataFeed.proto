@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+message FeedResponse {
+  repeated Feed feeds = 1;
+}
+
+message Feed {
+  string instrument_key = 1;
+  LTPC ltpc = 2;
+}
+
+message LTPC {
+  double ltp = 1;
+}

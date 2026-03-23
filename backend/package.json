@@ -1,0 +1,23 @@
+{
+  "name": "paper-trading-backend",
+  "version": "2.0.0",
+  "description": "Scalable Paper Trading Backend with Upstox Live Feed",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["paper-trading", "upstox", "express"],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.3",
+    "axios": "^1.13.6",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "protobufjs": "^8.0.0",
+    "ws": "^8.20.0"
+  }
+}

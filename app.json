@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Paper Trading",
+    "slug": "paper-trading",
+    "version": "1.0.0",
+    "sdkVersion": "54.0.0",
+    "scheme": "paper-trading",
+    "orientation": "portrait",
+    "icon": "./assets/trading_app.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/trading_app.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.papertrading.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/trading_app.png",
+        "backgroundImage": "./assets/trading_app.png",
+        "monochromeImage": "./assets/trading_app.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "127b49f0-938a-4c2b-8efe-6a230a733817"
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+Failed to get Git root path with `git rev-parse --show-toplevel`. Error: spawn git ENOENT
+Falling back to using current working directory as project root.
+You can set `EAS_PROJECT_ROOT` environment variable to let eas-cli know where your project is located.
+[
+  {
+    "id": "3871d481-79db-4bf7-8cab-a541d5731aae",
+    "status": "ERRORED",
+    "platform": "ANDROID",
+    "error": {
+      "errorCode": "EAS_BUILD_UNKNOWN_GRADLE_ERROR",
+      "message": "Gradle build failed with unknown error. See logs for the \"Run gradlew\" phase for more information."
+    },
+    "artifacts": {},
+    "initiatingActor": {
+      "id": "16b41f10-43ac-44c4-bb87-4a28be44c88f",
+      "displayName": "nishan98"
+    },
+    "logFiles": [
+      "https://job-logs.eascdn.net/production/3871d481-79db-4bf7-8cab-a541d5731aae/1773473968932-5230ef27-2026-4e19-a710-5d5bcfdf38ad.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260314%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260314T080614Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=3d36d6b87b91d9325eada5ad37c4d2d5e83afe00fcd97e7db52b022552aadca92871c2956ca7ea39d6c2453c1ed0f12b36d5faaf181cc7a3a76b52e58461402ffdec7ac1c6041d386314fa39a99478a24693ee95bf7b8c6e43438410156950878f278243d634077528afab2594ec09d9a6001d419b119ffa049a18460b0aa464f6088295d9b36f4595d37e71ca13275b1fe1af0397dee27872be307b1b65ebf427bf4dbbc963a49a1a0b3aab0c53c73218c5259fc835d958b55f78862afbfe76a9e0b643e953184e70962570d52aa85f98e7a2100be849dc42f0b4daf32e0cc31fed3d8f6aeb6c9bad0e5eab04c4141192feff30143b7036117916232002344e",
+      "https://job-logs.eascdn.net/production/3871d481-79db-4bf7-8cab-a541d5731aae/1773473974801-56aa1ebc-99a9-48dd-95c4-343236662ccd.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260314%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260314T080614Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=547413e727f9a05e0086f2906356a785399b7273338acd2ac1db91337d3f6c2779e1c5dde1f107beee07a9a11a80737a7a00fd9144e46e403ea92f7b6087ab27a637198050d7a5a93934f5a60c9a6fc34def6fbee833c0d07b008710d187a37e35181db17bd4a4ff87479aa382cdd4d05e4fd46ffebfb90bb91564603b673223489c0074236fa56fc43b94be25f0e541338b90df2aaaebda3d814e55b5f616e7a8f8558fb412f3db85b0e37dbe9e1fc792253a333502cf63d7817298fa2613ae7c4de34db4d2fc84190bb95242d6b16e6b02bb4ec47e39a393cc78ab9dfd889091a62f399aa8ec84eb3ed62774c16cc1ca7f62aa12bc9d0619a337eafe1dd2d2",
+      "https://job-logs.eascdn.net/production/3871d481-79db-4bf7-8cab-a541d5731aae/1773473975010-94938985-a2bc-4a4e-8812-b48abc0a5c95.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260314%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260314T080614Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=b0ee9212546dc395a54674a45193b9d88440b9163c24f8787ab9ab82d91b130cfee60ab8e440468d8bb1c83fcfac618471c1c6f02909ca78d688370ba2713dc97445b092a520e44a627c89093cb28403c7a90330f7db62d044ea9359fb6083561718c830d690f40d599b10f8974923dc9477f3685bb971b8dbf71f87b9c73db880f1930cb6341dfde3b606925697cd03d64ec2fbf106599ad40d7fc71408026b6383a817747c6533daedb04aee3fb5fcf1677659d56a4fc07745e41fc8300d7dfd7b9bb96f8cbcd2dbc13440470e13ff89c85933123ce7753ed611a993bab162c05251da62260217d66462f788bc7fa3f1a34d6d07f9a07e4ba5c6ec33f4b17a",
+      "https://job-logs.eascdn.net/production/3871d481-79db-4bf7-8cab-a541d5731aae/1773473975181-02e56fa5-7b7b-4c6b-a232-4b3e83bf6572.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20260314%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260314T080614Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=72047e8061e79a14d07a22ac438c3e9f9e52894f47c90fd586bb80f838bfe67f496147cebe6c48e013d437026c8607803bda1de5c9bdf3ef032f3a87d4ab1b9e316a129630aa3b91efa086d5f785926beb1c7d0f42ec56ce5ffb036e27cd6b1945d2f7c36555b54a40e3fd44b82b1763b92fd70327d2ae5000256a5c2b81ffd69b929651250f2f3eae03e2e1cf53f101bf0fd071c6259a0db42c7f2562951c02c899452fc3823a317eb0c80bfda065bf426a43752ca58efee1c3c65a95624bd4179a26785533aed30187906bee23480ef035942b72ce9bf7e863cb79802689f7d2f71af3df697cec02e1d6aa67bdc7f8dcd620c655b659101b42615e23267b2c"
+    ],
+    "project": {
+      "id": "0b57a1d2-206b-498a-b2e5-7f0733b7de46",
+      "name": "paper-trading",
+      "slug": "paper-trading",
+      "ownerAccount": {
+        "id": "69f356c0-0024-47d0-8ae8-058d36d8f954",
+        "name": "nishan98"
+      }
+    },
+    "distribution": "STORE",
+    "buildProfile": "preview",
+    "appVersion": "1.0.0",
+    "appBuildVersion": "1",
+    "priority": "NORMAL",
+    "createdAt": "2026-03-14T07:39:28.456Z",
+    "updatedAt": "2026-03-14T07:42:16.854Z",
+    "completedAt": "2026-03-14T07:42:07.088Z",
+    "expirationDate": "2026-04-13T07:39:28.485Z",
+    "isForIosSimulator": false,
+    "metrics": {
+      "buildWaitTime": 199,
+      "buildQueueTime": 36503,
+      "buildDuration": 121612
+    }
+  }
+]
