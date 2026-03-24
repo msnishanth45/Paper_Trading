@@ -64,6 +64,9 @@ app.use("/api/options", require("./routes/optionsRoutes"));
 // User (protected)
 app.use("/api/user", require("./routes/userRoutes"));
 
+// Trades (protected)
+app.use("/api/trades", require("./routes/tradeRoutes"));
+
 /* ── Health Check ── */
 
 app.get("/health", (req, res) => {
@@ -173,14 +176,15 @@ httpServer.listen(PORT, async () => {
     await priceEngine.start();
   }
 
-  // 4. Start background jobs
   const { startSlTargetJob } = require("./jobs/slTargetJob");
   const { startLimitOrderJob } = require("./jobs/limitOrderJob");
   const { startPnlJob } = require("./jobs/pnlJob");
+  const feedHealthMonitor = require("./utils/feedHealthMonitor");
 
   startSlTargetJob(SL_TARGET_INTERVAL);
   startLimitOrderJob(LIMIT_ORDER_INTERVAL);
   startPnlJob(1000); // 1-second interval for PnL UI feedback
+  feedHealthMonitor.start(10000); // Check every 10s
 
   logger.success("All systems initialized ✓");
 });
@@ -194,11 +198,13 @@ function shutdown(signal) {
   const { stopSlTargetJob } = require("./jobs/slTargetJob");
   const { stopLimitOrderJob } = require("./jobs/limitOrderJob");
   const { stopPnlJob } = require("./jobs/pnlJob");
+  const feedHealthMonitor = require("./utils/feedHealthMonitor");
 
   priceEngine.stop();
   stopSlTargetJob();
   stopLimitOrderJob();
   stopPnlJob();
+  feedHealthMonitor.stop();
 
   httpServer.close(() => {
     logger.info("Server closed");

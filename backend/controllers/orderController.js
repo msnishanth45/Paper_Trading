@@ -1,15 +1,14 @@
-const { executeBuy, executeSell } = require("../services/orderService");
+const { executeBuy, executeSell, executeOptionBuy, executeOptionSell, cancelOrder } = require("../services/orderService");
 const { query } = require("../db/mysql");
 const asyncHandler = require("../utils/asyncHandler");
 
 /**
  * POST /api/orders/buy
- * Body: { symbol, qty, target?, stoploss? }
- * User ID from JWT (req.user.id)
+ * Body: { symbol, qty, target?, stoploss?, trailing_sl? }
  */
 const buyOrder = asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const { symbol, qty, target, stoploss, instrument_key, option_type, strike, expiry } = req.body;
+  const { symbol, qty, target, stoploss, trailing_sl, instrument_key, option_type, strike, expiry } = req.body;
 
   if (!symbol || !qty) {
     return res
@@ -26,7 +25,8 @@ const buyOrder = asyncHandler(async (req, res) => {
     instrument_key,
     option_type,
     strike,
-    expiry
+    expiry,
+    trailing_sl
   );
   const status = result.success ? 200 : 400;
   res.status(status).json(result);
@@ -34,11 +34,10 @@ const buyOrder = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/orders/sell
- * Body: { position_id }
- * User ID from JWT (req.user.id)
+ * Body: { position_id, qty? }
  */
 const sellOrder = asyncHandler(async (req, res) => {
-  const { position_id } = req.body;
+  const { position_id, qty } = req.body;
   const userId = req.user.id;
 
   if (!position_id) {
@@ -47,14 +46,35 @@ const sellOrder = asyncHandler(async (req, res) => {
       .json({ success: false, message: "position_id is required" });
   }
 
-  const result = await executeSell(userId, position_id);
+  const result = await executeSell(userId, position_id, qty || null);
+  const status = result.success ? 200 : 400;
+  res.status(status).json(result);
+});
+
+/**
+ * POST /api/orders/option-buy
+ * Body: { symbol, qty, instrument_key, option_type, strike, expiry, target?, stoploss?, trailing_sl?, order_type?, limit_price? }
+ */
+const optionBuyOrder = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const result = await executeOptionBuy(userId, req.body);
+  const status = result.success ? 200 : 400;
+  res.status(status).json(result);
+});
+
+/**
+ * POST /api/orders/option-sell
+ * Body: { position_id, qty?, exit_type? }
+ */
+const optionSellOrder = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const result = await executeOptionSell(userId, req.body);
   const status = result.success ? 200 : 400;
   res.status(status).json(result);
 });
 
 /**
  * GET /api/orders/open
- * Returns all open positions for the authenticated user.
  */
 const getOpenPositions = asyncHandler(async (req, res) => {
   const userId = req.user.id;
@@ -71,15 +91,14 @@ const getOpenPositions = asyncHandler(async (req, res) => {
 });
 
 /**
- * PATCH /api/orders/:id
- * Updates target and/or stoploss for an open position/order.
+ * PATCH /api/orders/:id/modify
+ * Updates target, stoploss, and/or trailing_sl for an open position.
  */
 const modifyOrder = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { target, stoploss } = req.body;
+  const { target, stoploss, trailing_sl } = req.body;
   const userId = req.user.id;
 
-  // Verify the position belongs to the user and is OPEN
   const positions = await query(
     "SELECT * FROM positions WHERE id = ? AND user_id = ? AND status = 'OPEN'",
     [id, userId]
@@ -92,21 +111,34 @@ const modifyOrder = asyncHandler(async (req, res) => {
     });
   }
 
-  // Update position
   await query(
-    "UPDATE positions SET target = ?, stoploss = ? WHERE id = ?",
-    [target || null, stoploss || null, id]
+    "UPDATE positions SET target = ?, stoploss = ?, trailing_sl = ? WHERE id = ?",
+    [target || null, stoploss || null, trailing_sl || null, id]
   );
 
   res.json({
     success: true,
     message: "Order parameters updated successfully",
     data: {
-      id,
+      id: parseInt(id),
       target: target || null,
       stoploss: stoploss || null,
+      trailing_sl: trailing_sl || null,
     },
   });
 });
 
-module.exports = { buyOrder, sellOrder, getOpenPositions, modifyOrder };
+/**
+ * DELETE /api/orders/:id/cancel
+ * Cancel a pending order.
+ */
+const cancelOrderController = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  const result = await cancelOrder(userId, parseInt(id));
+  const status = result.success ? 200 : 400;
+  res.status(status).json(result);
+});
+
+module.exports = { buyOrder, sellOrder, optionBuyOrder, optionSellOrder, getOpenPositions, modifyOrder, cancelOrderController };

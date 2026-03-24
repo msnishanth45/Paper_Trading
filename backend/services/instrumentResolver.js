@@ -1,7 +1,8 @@
 /* ═══════════════════════════════════════════════════
-   Instrument Resolver — Dynamic Futures Discovery
-   Downloads Upstox NSE_FO CSV and finds nearest
-   expiry NIFTY & BANKNIFTY futures contracts.
+   Instrument Resolver — Dynamic Futures & Options Discovery
+   Downloads Upstox NSE_FO CSV, finds nearest expiry
+   futures, and builds option chain data with expiry
+   management and in-memory caching.
    ═══════════════════════════════════════════════════ */
 
 const axios = require("axios");
@@ -22,6 +23,12 @@ const INDEX_KEYS = {
   NIFTY: "NSE_INDEX|Nifty 50",
   BANKNIFTY: "NSE_INDEX|Nifty Bank",
   SENSEX: "BSE_INDEX|SENSEX",
+};
+
+/* Strike step sizes per underlying */
+const STRIKE_STEPS = {
+  NIFTY: 50,
+  BANKNIFTY: 100,
 };
 
 /* Cache the full parsed CSV in memory for option chain lookups */
@@ -47,7 +54,6 @@ async function downloadInstruments() {
       const res = await axios.get(url, {
         timeout: 30000,
         responseType: "text",
-        // Handle gzip automatically via axios
         decompress: true,
       });
       csvText = res.data;
@@ -75,14 +81,10 @@ async function downloadInstruments() {
 
 /**
  * Find the nearest expiry futures contract for a given underlying symbol.
- * @param {Array} instruments - Parsed CSV rows
- * @param {string} symbol - e.g. "NIFTY", "BANKNIFTY"
- * @returns {{ instrumentKey: string, expiry: string, tradingSymbol: string } | null}
  */
 function findNearestFuture(instruments, symbol) {
   const now = new Date();
 
-  // Filter futures for this symbol
   const futures = instruments.filter((row) => {
     const name = (row.name || row.tradingsymbol || "").toUpperCase();
     const instrType = (row.instrument_type || "").toUpperCase();
@@ -99,7 +101,6 @@ function findNearestFuture(instruments, symbol) {
     return null;
   }
 
-  // Sort by expiry date ascending, pick the nearest one that hasn't expired
   const validFutures = futures
     .map((row) => ({
       instrumentKey: row.instrument_key || `NSE_FO|${row.tradingsymbol}`,
@@ -125,7 +126,6 @@ function findNearestFuture(instruments, symbol) {
 
 /**
  * Resolve all instrument keys to subscribe to.
- * Returns { symbolMap, instrumentKeys, instrumentToSymbol }
  */
 async function resolveInstruments() {
   const symbolMap = {};
@@ -151,7 +151,6 @@ async function resolveInstruments() {
   } catch (err) {
     logger.error(`[RESOLVER] CSV download failed, using fallbacks: ${err.message}`);
 
-    // Use fallback hardcoded keys
     for (const [sym, key] of Object.entries(FALLBACK_KEYS)) {
       symbolMap[sym] = key;
       instrumentToSymbol[key] = sym;
@@ -169,48 +168,83 @@ async function resolveInstruments() {
 }
 
 /**
- * Get the nearest expiry date for options of a given symbol.
+ * Get all available expiry dates for options of a given symbol.
+ * Returns sorted array of expiry date strings.
  */
-function getNearestOptionExpiry(symbol) {
+function getAvailableExpiries(symbol) {
   const now = new Date();
-  
-  const options = instrumentsCache.filter((row) => {
-    const name = (row.name || row.tradingsymbol || "").toUpperCase();
+  now.setHours(0, 0, 0, 0);
+
+  const expirySet = new Set();
+
+  for (const row of instrumentsCache) {
     const instrType = (row.instrument_type || "").toUpperCase();
     const underlying = (row.underlying || row.name || "").toUpperCase();
-    
-    return (
-      (instrType === "OPTIDX" || instrType === "OPTSTK") &&
+    const name = (row.name || row.tradingsymbol || "").toUpperCase();
+
+    if (
+      (instrType === "OPTIDX" || instrType === "OPTSTK" || instrType === "CE" || instrType === "PE") &&
       (underlying === symbol || name.startsWith(symbol))
-    );
-  });
+    ) {
+      if (row.expiry) {
+        const expDate = new Date(row.expiry);
+        if (expDate >= now) {
+          expirySet.add(row.expiry);
+        }
+      }
+    }
+  }
 
-  if (options.length === 0) return null;
-
-  const validOptions = options
-    .map(r => ({ ...r, parsedExpiry: new Date(r.expiry) }))
-    .filter(r => r.parsedExpiry >= now)
-    .sort((a, b) => a.parsedExpiry - b.parsedExpiry);
-
-  if (validOptions.length === 0) return null;
-
-  return validOptions[0].expiry; // Return string expiry of the nearest one e.g., "2024-04-25"
+  // Sort ascending
+  return Array.from(expirySet).sort((a, b) => new Date(a) - new Date(b));
 }
 
 /**
- * Generate an Option Chain (ATM ± 10 levels) for a symbol at a specific LTP.
+ * Get the nearest (weekly) expiry date for options of a given symbol.
  */
-function getOptionChainStrikes(symbol, ltp, numLevels = 10) {
-  const expiry = getNearestOptionExpiry(symbol);
-  if (!expiry) return [];
+function getNearestOptionExpiry(symbol) {
+  const expiries = getAvailableExpiries(symbol);
+  return expiries.length > 0 ? expiries[0] : null;
+}
 
-  // Determine strike step (e.g. NIFTY 50, BANKNIFTY 100)
-  const step = symbol === "NIFTY" ? 50 : symbol === "BANKNIFTY" ? 100 : 50;
-  const atm = Math.round(ltp / step) * step;
+/**
+ * Detect option type from CSV row.
+ * Tries: instrument_type field, option_type field, then trading symbol suffix.
+ */
+function detectOptionType(row) {
+  const instrType = (row.instrument_type || "").toUpperCase();
+  if (instrType === "CE" || instrType === "PE") return instrType;
+
+  const optType = (row.option_type || "").toUpperCase();
+  if (optType === "CE" || optType === "PE") return optType;
+
+  const ts = (row.tradingsymbol || row.trading_symbol || "").toUpperCase();
+  if (ts.endsWith("CE")) return "CE";
+  if (ts.endsWith("PE")) return "PE";
+
+  return null;
+}
+
+/**
+ * Generate an Option Chain (ATM ± numLevels) for a symbol at a specific LTP.
+ * @param {string} symbol - Underlying symbol (NIFTY, BANKNIFTY)
+ * @param {number} ltp - Last traded price (preferably futures LTP)
+ * @param {number} numLevels - Number of strikes above and below ATM (default 20)
+ * @param {string|null} expiry - Specific expiry date string. If null, uses nearest.
+ * @returns {Array} Array of option instrument objects with strike type info
+ */
+function getOptionChainStrikes(symbol, ltp, numLevels = 20, expiry = null) {
+  // Resolve expiry
+  const targetExpiry = expiry || getNearestOptionExpiry(symbol);
+  if (!targetExpiry) return { instruments: [], atmStrike: 0, expiry: null };
+
+  // Determine strike step
+  const step = STRIKE_STEPS[symbol] || 50;
+  const atmStrike = Math.round(ltp / step) * step;
 
   const strikes = [];
   for (let i = -numLevels; i <= numLevels; i++) {
-    strikes.push(atm + (i * step));
+    strikes.push(atmStrike + i * step);
   }
 
   // Filter cache for these strikes, specific expiry, and symbol
@@ -218,34 +252,56 @@ function getOptionChainStrikes(symbol, ltp, numLevels = 10) {
     const name = (row.name || row.tradingsymbol || "").toUpperCase();
     const underlying = (row.underlying || row.name || "").toUpperCase();
     const instrType = (row.instrument_type || "").toUpperCase();
-    
+
     return (
-      (instrType === "OPTIDX" || instrType === "OPTSTK") &&
+      (instrType === "OPTIDX" || instrType === "OPTSTK" || instrType === "CE" || instrType === "PE") &&
       (underlying === symbol || name.startsWith(symbol)) &&
-      row.expiry === expiry &&
+      row.expiry === targetExpiry &&
       strikes.includes(parseFloat(row.strike))
     );
   });
 
-  return chainInstruments.map(row => ({
-    instrumentKey: row.instrument_key || `NSE_FO|${row.tradingsymbol}`,
-    tradingSymbol: row.tradingsymbol || row.trading_symbol,
-    strike: parseFloat(row.strike),
-    optionType: row.instrument_type.includes("CE") || (row.tradingsymbol||"").endsWith("CE") ? "CE" : "PE",
-    expiry: row.expiry,
-    lotSize: parseInt(row.lot_size, 10) || 1
-  }));
+  const instruments = chainInstruments.map((row) => {
+    const strike = parseFloat(row.strike);
+    const optionType = detectOptionType(row);
+
+    // Determine strike classification
+    let type = "OTM";
+    if (strike === atmStrike) {
+      type = "ATM";
+    } else if (optionType === "CE" && strike < atmStrike) {
+      type = "ITM";
+    } else if (optionType === "PE" && strike > atmStrike) {
+      type = "ITM";
+    }
+
+    return {
+      instrumentKey: row.instrument_key || `NSE_FO|${row.tradingsymbol}`,
+      tradingSymbol: row.tradingsymbol || row.trading_symbol,
+      strike,
+      optionType,
+      expiry: row.expiry,
+      lotSize: parseInt(row.lot_size, 10) || 1,
+      type,
+    };
+  });
+
+  return { instruments, atmStrike, expiry: targetExpiry };
 }
 
 function getCachedInstruments() {
   return instrumentsCache;
 }
 
-module.exports = { 
-  resolveInstruments, 
-  INDEX_KEYS, 
+module.exports = {
+  resolveInstruments,
+  INDEX_KEYS,
   FUTURES_SYMBOLS,
+  STRIKE_STEPS,
   getCachedInstruments,
   getOptionChainStrikes,
-  getNearestOptionExpiry
+  getNearestOptionExpiry,
+  getAvailableExpiries,
+  detectOptionType,
+  downloadInstruments,
 };

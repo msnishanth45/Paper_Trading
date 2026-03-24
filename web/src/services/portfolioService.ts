@@ -15,4 +15,9 @@ export const portfolioService = {
     const response = await api.get('/portfolio/history');
     return response.data;
   },
+
+  async getSummary() {
+    const response = await api.get('/portfolio/summary');
+    return response.data;
+  },
 };

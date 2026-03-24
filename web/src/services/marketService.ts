@@ -16,8 +16,17 @@ export const marketService = {
     return response.data;
   },
 
-  async getOptionsChain(symbol: string) {
-    const response = await api.get(`/options/chain?symbol=${symbol}`);
+  async getOptionsChain(symbol: string, expiry?: string) {
+    let url = `/options/chain?symbol=${symbol}`;
+    if (expiry) {
+      url += `&expiry=${expiry}`;
+    }
+    const response = await api.get(url);
+    return response.data;
+  },
+
+  async getExpiries(symbol: string) {
+    const response = await api.get(`/options/expiries?symbol=${symbol}`);
     return response.data;
   },
 };

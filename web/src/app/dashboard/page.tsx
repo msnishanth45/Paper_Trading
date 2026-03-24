@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import AuthGuard from "../../components/AuthGuard";
 import Navbar from "../../components/Navbar";
 import PriceCard from "../../components/PriceCard";
-import PnlSummary from "../../components/PnlSummary";
+import PnlDashboard from "../../components/PnlDashboard";
 import PositionsTable from "../../components/PositionsTable";
 import BuyOrderForm from "../../components/BuyOrderForm";
 import OptionChain from "../../components/OptionChain";
@@ -30,6 +30,7 @@ export default function Dashboard() {
     roi: 0,
     positions: [],
   });
+  const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
 
@@ -39,10 +40,13 @@ export default function Dashboard() {
 
   const fetchPortfolio = async () => {
     try {
-      const res = await portfolioService.getPnL();
-      if (res.success) {
-        setPortfolio(res);
-      }
+      const [pnlRes, sumRes] = await Promise.all([
+        portfolioService.getPnL(),
+        portfolioService.getSummary()
+      ]);
+      
+      if (pnlRes.success) setPortfolio(pnlRes);
+      if (sumRes.success) setSummary(sumRes.data);
     } catch (err) {
       console.error("Failed to fetch portfolio:", err);
     } finally {
@@ -82,22 +86,20 @@ export default function Dashboard() {
   }, [user]);
 
   // Handle Sell Action
-  const handleSell = async (positionId: number) => {
-    if (confirm("Are you sure you want to exit this position at market price?")) {
-      try {
-        await orderService.sell(positionId);
-        await fetchPortfolio();
-        await refreshProfile();
-      } catch (err: any) {
-        alert(err.response?.data?.message || err.message);
-      }
+  const handleSell = async (positionId: number, qty?: number) => {
+    try {
+      await orderService.sell(positionId, qty);
+      await fetchPortfolio();
+      await refreshProfile();
+    } catch (err: any) {
+      alert(err.response?.data?.message || err.message);
     }
   };
 
-  // Handle Modify Target/SL Action
-  const handleModify = async (positionId: number, target: number | null, stoploss: number | null) => {
+  // Handle Modify Target/SL/Trailing SL Action
+  const handleModify = async (positionId: number, target: number | null, stoploss: number | null, trailing_sl: number | null) => {
     try {
-      await orderService.modifyPosition(positionId, { target, stoploss });
+      await orderService.modifyPosition(positionId, { target, stoploss, trailing_sl });
       await fetchPortfolio();
     } catch (err: any) {
       alert(err.response?.data?.message || err.message);
@@ -129,12 +131,7 @@ export default function Dashboard() {
               <PriceCard symbol="BANKNIFTY" price={prices["BANKNIFTY"] || 0} />
             </div>
             <div className="col-span-1 lg:col-span-2">
-              <PnlSummary
-                totalPnL={portfolio.totalPnL}
-                invested={portfolio.invested}
-                currentValue={portfolio.currentValue}
-                roi={portfolio.roi}
-              />
+              <PnlDashboard data={summary} loading={loading} />
             </div>
           </div>
 
@@ -197,12 +194,13 @@ export default function Dashboard() {
 
                 <BuyOrderForm
                   symbol={selectedOption ? selectedOption.tradingSymbol : selectedSymbol}
-                  ltp={selectedOption ? (prices[selectedOption.tradingSymbol] || selectedOption.price || 0) : (prices[selectedSymbol] || 0)}
+                  ltp={selectedOption ? (prices[selectedOption.tradingSymbol] || selectedOption.ltp || 0) : (prices[selectedSymbol] || 0)}
                   lotSize={selectedOption ? selectedOption.lotSize : 1}
                   instrumentKey={selectedOption ? selectedOption.instrumentKey : undefined}
                   optionType={selectedOption ? selectedOption.optionType : undefined}
                   strike={selectedOption ? selectedOption.strike : undefined}
                   expiry={selectedOption ? selectedOption.expiry : undefined}
+                  action={selectedOption ? selectedOption.action : 'BUY'}
                   onSuccess={() => {
                     fetchPortfolio();
                     refreshProfile();

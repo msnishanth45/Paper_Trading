@@ -7,9 +7,9 @@ const socketService = require("../services/socketService");
 let intervalId = null;
 
 /**
- * Start the SL/Target monitoring job.
- * Checks every `intervalMs` milliseconds for positions that have hit
- * their target or stoploss, and auto-closes them.
+ * Start the SL/Target/Trailing-SL monitoring job.
+ * Checks every `intervalMs` for positions that have hit
+ * their target, stoploss, or need trailing SL adjustments.
  */
 function startSlTargetJob(intervalMs = 1500) {
   logger.info(`SL/Target job started (interval: ${intervalMs}ms)`);
@@ -26,10 +26,38 @@ function startSlTargetJob(intervalMs = 1500) {
 
       for (const pos of openPositions) {
         const price = priceCache.get(pos.symbol);
-        if (!price) continue;
+        if (!price || price <= 0) continue;
 
+        const avgPrice = parseFloat(pos.avg_price);
         let exitReason = null;
 
+        // ── Trailing SL Logic ──
+        // If trailing_sl is set, track peak price and adjust stoploss upward
+        if (pos.trailing_sl && parseFloat(pos.trailing_sl) > 0) {
+          const trailingAmount = parseFloat(pos.trailing_sl);
+          const currentPeak = pos.peak_price ? parseFloat(pos.peak_price) : avgPrice;
+
+          // If current price exceeds peak, update peak and move SL up
+          if (price > currentPeak) {
+            const newPeak = price;
+            const newSL = newPeak - trailingAmount;
+
+            await query(
+              "UPDATE positions SET peak_price = ?, stoploss = ? WHERE id = ?",
+              [newPeak, newSL, pos.id]
+            );
+
+            logger.debug(
+              `[TRAILING] ${pos.symbol} peak: ${currentPeak} → ${newPeak}, SL → ${newSL.toFixed(2)}`
+            );
+
+            // Update pos object for SL check below
+            pos.stoploss = newSL;
+            pos.peak_price = newPeak;
+          }
+        }
+
+        // ── Target/SL Check ──
         if (pos.target && price >= parseFloat(pos.target)) {
           exitReason = "TARGET_HIT";
         } else if (pos.stoploss && price <= parseFloat(pos.stoploss)) {
@@ -39,7 +67,7 @@ function startSlTargetJob(intervalMs = 1500) {
         if (!exitReason) continue;
 
         logger.trade(
-          `${exitReason}: ${pos.symbol} @ ${price} (entry: ${pos.avg_price})`
+          `${exitReason}: ${pos.symbol} @ ${price} (entry: ${avgPrice})`
         );
 
         // 1. Close position
@@ -48,7 +76,6 @@ function startSlTargetJob(intervalMs = 1500) {
         ]);
 
         // 2. Calculate PnL & return proceeds
-        const avgPrice = parseFloat(pos.avg_price);
         const pnl = (price - avgPrice) * pos.qty;
         const proceeds = price * pos.qty;
 

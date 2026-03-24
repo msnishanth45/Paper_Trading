@@ -6,8 +6,23 @@ export const orderService = {
     return response.data;
   },
 
-  async sell(positionId: number) {
-    const response = await api.post('/orders/sell', { position_id: positionId });
+  async sell(positionId: number, qty?: number) {
+    const response = await api.post('/orders/sell', { position_id: positionId, qty });
+    return response.data;
+  },
+
+  async optionBuy(data: { symbol: string; qty: number; instrument_key: string; option_type: string; strike: number; expiry: string; target?: number; stoploss?: number; trailing_sl?: number; order_type?: 'MARKET'|'LIMIT'; limit_price?: number; }) {
+    const response = await api.post('/orders/option-buy', data);
+    return response.data;
+  },
+
+  async optionSell(data: { position_id: number; qty?: number; exit_type?: 'FULL' | 'PARTIAL' }) {
+    const response = await api.post('/orders/option-sell', data);
+    return response.data;
+  },
+
+  async cancelOrder(orderId: number) {
+    const response = await api.delete(`/orders/${orderId}/cancel`);
     return response.data;
   },
 
@@ -26,8 +41,13 @@ export const orderService = {
     return response.data;
   },
 
-  async modifyPosition(id: number, data: { target?: number | null; stoploss?: number | null }) {
-    const response = await api.patch(`/orders/${id}`, data);
+  async modifyPosition(id: number, data: { target?: number | null; stoploss?: number | null; trailing_sl?: number | null }) {
+    const response = await api.patch(`/orders/${id}/modify`, data);
+    return response.data;
+  },
+
+  async getTradeDetail(id: number) {
+    const response = await api.get(`/trades/${id}`);
     return response.data;
   },
 };

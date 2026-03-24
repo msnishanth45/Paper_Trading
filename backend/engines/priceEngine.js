@@ -4,10 +4,11 @@
    Features:
    • Dynamic instrument resolution via CSV
    • Heartbeat timeout detection (auto-reconnect)
-   • Full protobuf V3 decoding
+   • Full protobuf V3 decoding with OI extraction
    • Market hours guard
    • Exponential backoff with jitter
    • Socket.IO live price push
+   • Dynamic subscribe/unsubscribe for option chains
    ═══════════════════════════════════════════════════ */
 
 const WebSocket = require("ws");
@@ -32,22 +33,23 @@ let reconnectAttempts = 0;
 let priceEmitTimer = null;
 
 const MAX_RECONNECT_DELAY = 60000;
-const PRICE_EMIT_INTERVAL = 100; // emit to Socket.IO every 100ms for <300ms propagation delay
+const PRICE_EMIT_INTERVAL = 100;
 
 /* Resolved instrument maps (populated on start) */
 let SYMBOL_MAP = {};
 let INSTRUMENT_TO_SYMBOL = {};
 let INSTRUMENT_KEYS = [];
 
+/* Track which keys are "core" (always subscribed) vs "option chain" (dynamic) */
+let CORE_KEYS = [];
+let OPTION_CHAIN_KEYS = [];
+
 /* Connection state */
-let connectionState = "disconnected"; // disconnected | connecting | connected
+let connectionState = "disconnected";
 let connectedAt = null;
 
 /* ── Public API ── */
 
-/**
- * Set the Upstox access token and (re)start the feed.
- */
 async function setToken(token) {
   accessToken = token;
   logger.ws("[ENGINE] Access token updated");
@@ -60,12 +62,6 @@ function getToken() {
   return accessToken;
 }
 
-/**
- * Start the price engine:
- * 1. Load protobuf schema
- * 2. Resolve instruments dynamically
- * 3. Connect to Upstox WS
- */
 async function start() {
   // 1. Load protobuf
   const protoPath = path.join(__dirname, "..", "MarketDataFeed.proto");
@@ -81,9 +77,9 @@ async function start() {
     SYMBOL_MAP = resolved.symbolMap;
     INSTRUMENT_TO_SYMBOL = resolved.instrumentToSymbol;
     INSTRUMENT_KEYS = resolved.instrumentKeys;
+    CORE_KEYS = [...resolved.instrumentKeys]; // Core keys never get unsubscribed
   } catch (err) {
     logger.error(`[ENGINE] Instrument resolution failed: ${err.message}`);
-    // Fallback to index keys only
     SYMBOL_MAP = {
       NIFTY: "NSE_INDEX|Nifty 50",
       BANKNIFTY: "NSE_INDEX|Nifty Bank",
@@ -93,6 +89,7 @@ async function start() {
       "NSE_INDEX|Nifty Bank": "BANKNIFTY",
     };
     INSTRUMENT_KEYS = Object.values(SYMBOL_MAP);
+    CORE_KEYS = [...INSTRUMENT_KEYS];
   }
 
   // 3. Check token
@@ -104,9 +101,6 @@ async function start() {
   await connectFeed();
 }
 
-/**
- * Stop the WebSocket cleanly.
- */
 function stop() {
   clearTimers();
 
@@ -121,9 +115,6 @@ function stop() {
   logger.ws("[ENGINE] Price engine stopped");
 }
 
-/**
- * Get current engine status for the feed-status API.
- */
 function getStatus() {
   return {
     connectionState,
@@ -131,6 +122,8 @@ function getStatus() {
     accessTokenSet: !!accessToken,
     reconnectAttempts,
     instrumentCount: INSTRUMENT_KEYS.length,
+    coreKeyCount: CORE_KEYS.length,
+    optionChainKeyCount: OPTION_CHAIN_KEYS.length,
     instruments: SYMBOL_MAP,
     socketClients: socketService.getConnectedCount(),
     feedStatus: priceCache.getFeedStatus(),
@@ -141,7 +134,6 @@ function getStatus() {
  * Dynamically subscribe to new instrument keys (e.g. for Option Chains)
  */
 function addSubscription(keys, mapping = {}) {
-  // mapping is { [symbol]: instrumentKey }
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   
   const newKeys = keys.filter(k => !INSTRUMENT_KEYS.includes(k));
@@ -160,6 +152,59 @@ function addSubscription(keys, mapping = {}) {
   };
   ws.send(JSON.stringify(subscribeMsg));
   logger.feed(`[ENGINE] Dynamically subscribed to ${newKeys.length} new instruments`);
+}
+
+/**
+ * Replace option chain subscriptions.
+ * Unsubscribes old option chain keys and subscribes to new ones.
+ * Core keys (indexes + futures) are never unsubscribed.
+ */
+function replaceSubscription(newKeys, mapping = {}) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // 1. Unsubscribe old option chain keys
+  if (OPTION_CHAIN_KEYS.length > 0) {
+    const unsubMsg = {
+      guid: `unsub-${Date.now()}`,
+      method: "unsub",
+      data: { instrumentKeys: OPTION_CHAIN_KEYS },
+    };
+    ws.send(JSON.stringify(unsubMsg));
+    logger.feed(`[ENGINE] Unsubscribed ${OPTION_CHAIN_KEYS.length} old option chain keys`);
+
+    // Clean up old keys from maps
+    for (const key of OPTION_CHAIN_KEYS) {
+      const sym = INSTRUMENT_TO_SYMBOL[key];
+      if (sym) {
+        delete SYMBOL_MAP[sym];
+        delete INSTRUMENT_TO_SYMBOL[key];
+      }
+    }
+  }
+
+  // 2. Filter out keys that are already in core
+  const uniqueNewKeys = newKeys.filter(k => !CORE_KEYS.includes(k));
+
+  // 3. Update tracking
+  OPTION_CHAIN_KEYS = uniqueNewKeys;
+  INSTRUMENT_KEYS = [...CORE_KEYS, ...uniqueNewKeys];
+
+  // 4. Update maps
+  Object.assign(SYMBOL_MAP, mapping);
+  for (const [sym, key] of Object.entries(mapping)) {
+    INSTRUMENT_TO_SYMBOL[key] = sym;
+  }
+
+  // 5. Subscribe to new keys
+  if (uniqueNewKeys.length > 0) {
+    const subMsg = {
+      guid: `sub-${Date.now()}`,
+      method: "sub",
+      data: { mode: "full", instrumentKeys: uniqueNewKeys },
+    };
+    ws.send(JSON.stringify(subMsg));
+    logger.feed(`[ENGINE] Subscribed to ${uniqueNewKeys.length} new option chain keys`);
+  }
 }
 
 /* ── Internals ── */
@@ -187,10 +232,8 @@ function clearTimers() {
 async function connectFeed() {
   if (!accessToken) return;
 
-  // Market hours guard (skip if outside market hours)
   if (!isMarketOpen()) {
     logger.ws("[ENGINE] Market closed — will retry when market opens");
-    // Check every 60 seconds if market has opened
     reconnectTimer = setTimeout(async () => {
       reconnectTimer = null;
       await connectFeed();
@@ -222,7 +265,6 @@ async function connectFeed() {
       reconnectAttempts = 0;
       priceCache.setFeedConnected(true);
 
-      // Subscribe with full mode
       const subscribeMsg = {
         guid: "paper-trading-v3",
         method: "sub",
@@ -231,16 +273,12 @@ async function connectFeed() {
       ws.send(JSON.stringify(subscribeMsg));
       logger.feed(`[ENGINE] Subscribed to ${INSTRUMENT_KEYS.length} instruments (mode: full)`);
 
-      // Start heartbeat monitor
       resetHeartbeat();
-
-      // Start Socket.IO price emission interval
       startPriceEmitter();
     });
 
     ws.on("message", (buffer) => {
       try {
-        // Reset heartbeat on any message
         resetHeartbeat();
 
         const decoded = FeedResponse.decode(new Uint8Array(buffer));
@@ -256,20 +294,23 @@ async function connectFeed() {
           const feed = obj.feeds[key];
           let price = null;
 
-          // Extract price from the various feed structures
           price = extractPrice(feed);
-
           if (!price || price <= 0) continue;
 
           const symbol = INSTRUMENT_TO_SYMBOL[key];
           if (symbol) {
             priceCache.set(symbol, price);
           }
+
+          // Extract OI if available
+          const oi = extractOI(feed);
+          if (oi !== null && symbol) {
+            priceCache.setOI(symbol, oi);
+          }
         }
 
         logger.price("LIVE:", priceCache.getAll());
       } catch (err) {
-        // Heartbeat/ping packets — ignore decode errors
         logger.debug(`[ENGINE] Packet decode skip: ${err.message}`);
       }
     });
@@ -297,20 +338,12 @@ async function connectFeed() {
 
 /**
  * Extract price from a Feed object.
- * Handles all V3 feed structures:
- *   1. ltpc.ltp (ltpc mode)
- *   2. fullFeed.marketFF.ltpc.ltp (market full feed)
- *   3. fullFeed.indexFF.ltpc.ltp (index full feed)
- *   4. fullFeed.marketFF.marketOHLC.ohlc[0].close (OHLC fallback)
- *   5. firstLevelWithGreeks.ltpc.ltp (option greeks mode)
  */
 function extractPrice(feed) {
-  // Case 1: Direct LTPC mode
   if (feed.ltpc && feed.ltpc.ltp) {
     return feed.ltpc.ltp;
   }
 
-  // Case 2: Full Feed — Market
   if (feed.fullFeed) {
     const ff = feed.fullFeed;
 
@@ -318,12 +351,10 @@ function extractPrice(feed) {
       return ff.marketFF.ltpc.ltp;
     }
 
-    // Case 3: Full Feed — Index
     if (ff.indexFF && ff.indexFF.ltpc && ff.indexFF.ltpc.ltp) {
       return ff.indexFF.ltpc.ltp;
     }
 
-    // Case 4: OHLC close fallback (market)
     if (
       ff.marketFF &&
       ff.marketFF.marketOHLC &&
@@ -333,7 +364,6 @@ function extractPrice(feed) {
       return ff.marketFF.marketOHLC.ohlc[0].close;
     }
 
-    // Case 4b: OHLC close fallback (index)
     if (
       ff.indexFF &&
       ff.indexFF.marketOHLC &&
@@ -344,9 +374,36 @@ function extractPrice(feed) {
     }
   }
 
-  // Case 5: First Level With Greeks
   if (feed.firstLevelWithGreeks && feed.firstLevelWithGreeks.ltpc && feed.firstLevelWithGreeks.ltpc.ltp) {
     return feed.firstLevelWithGreeks.ltpc.ltp;
+  }
+
+  return null;
+}
+
+/**
+ * Extract Open Interest from a Feed object.
+ */
+function extractOI(feed) {
+  if (feed.fullFeed) {
+    const ff = feed.fullFeed;
+
+    // Market full feed may have eFeedDetails with OI
+    if (ff.marketFF) {
+      // Check eFeedDetails
+      if (ff.marketFF.eFeedDetails && ff.marketFF.eFeedDetails.oi !== undefined) {
+        return ff.marketFF.eFeedDetails.oi;
+      }
+      // Check marketLevel
+      if (ff.marketFF.marketLevel && ff.marketFF.marketLevel.oi !== undefined) {
+        return ff.marketFF.marketLevel.oi;
+      }
+    }
+  }
+
+  // firstLevelWithGreeks has OI data
+  if (feed.firstLevelWithGreeks && feed.firstLevelWithGreeks.oi !== undefined) {
+    return feed.firstLevelWithGreeks.oi;
   }
 
   return null;
@@ -380,9 +437,6 @@ async function loadSnapshot() {
   }
 }
 
-/**
- * Heartbeat: if no tick for HEARTBEAT_TIMEOUT_MS, force reconnect.
- */
 function resetHeartbeat() {
   if (heartbeatTimer) clearTimeout(heartbeatTimer);
 
@@ -401,13 +455,9 @@ function resetHeartbeat() {
   }, HEARTBEAT_TIMEOUT_MS);
 }
 
-/**
- * Exponential backoff with jitter for reconnections.
- */
 function scheduleReconnect() {
   if (reconnectTimer) return;
 
-  // Don't reconnect spam outside market hours
   if (!isMarketOpen()) {
     logger.ws("[ENGINE] Market closed — pausing reconnect");
     reconnectTimer = setTimeout(async () => {
@@ -419,7 +469,7 @@ function scheduleReconnect() {
 
   reconnectAttempts++;
   const baseDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
-  const jitter = Math.random() * 1000; // 0–1s jitter
+  const jitter = Math.random() * 1000;
   const delay = baseDelay + jitter;
 
   logger.ws(`[ENGINE] Reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts})`);
@@ -430,9 +480,6 @@ function scheduleReconnect() {
   }, delay);
 }
 
-/**
- * Periodically emit price updates to Socket.IO clients.
- */
 function startPriceEmitter() {
   if (priceEmitTimer) clearInterval(priceEmitTimer);
 
@@ -444,4 +491,4 @@ function startPriceEmitter() {
   }, PRICE_EMIT_INTERVAL);
 }
 
-module.exports = { start, stop, setToken, getToken, getStatus, addSubscription, SYMBOL_MAP };
+module.exports = { start, stop, setToken, getToken, getStatus, addSubscription, replaceSubscription, SYMBOL_MAP };

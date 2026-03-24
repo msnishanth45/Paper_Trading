@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════
    Price Cache — Production-Grade Singleton
-   Tracks prices, timestamps, and feed health.
+   Tracks prices, OI, timestamps, and feed health.
    Optional Redis layer via REDIS_URL env var.
    ═══════════════════════════════════════════════════ */
 
@@ -13,6 +13,7 @@ class PriceCache {
   constructor() {
     this._store = new Map();        // symbol → price
     this._timestamps = new Map();   // symbol → lastTickAt (ms)
+    this._oiStore = new Map();      // symbol → open interest
     this._startedAt = Date.now();
     this._totalTicks = 0;
     this._feedConnected = false;
@@ -87,9 +88,28 @@ class PriceCache {
   clear() {
     this._store.clear();
     this._timestamps.clear();
+    this._oiStore.clear();
     if (redisClient) {
       redisClient.del("prices").catch(() => {});
     }
+  }
+
+  /* ── Open Interest Methods ── */
+
+  setOI(symbol, oi) {
+    this._oiStore.set(symbol, oi);
+  }
+
+  getOI(symbol) {
+    return this._oiStore.get(symbol) || null;
+  }
+
+  getAllOI() {
+    const result = {};
+    for (const [key, value] of this._oiStore) {
+      result[key] = value;
+    }
+    return result;
   }
 
   /* ── Feed Status ── */
@@ -103,6 +123,7 @@ class PriceCache {
     for (const [key, value] of this._store) {
       symbols[key] = {
         price: value,
+        oi: this._oiStore.get(key) || null,
         lastTickAt: this._timestamps.get(key) || null,
         stale: this._isStale(key),
         age: this._timestamps.has(key)
