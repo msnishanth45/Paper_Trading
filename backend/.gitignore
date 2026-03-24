@@ -1,9 +1,0 @@
-# .env
-.env
-.env.local
-
-# Dependencies
-node_modules/
-
-# Logs
-*.log
