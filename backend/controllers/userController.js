@@ -1,40 +1,69 @@
-const supabase = require("../config/supabase");
+const { query } = require("../db/mysql");
 const asyncHandler = require("../utils/asyncHandler");
 
 /**
- * POST /api/create-user
- * Creates a new user with 100,000 starting balance.
- */
-const createUser = asyncHandler(async (req, res) => {
-  const { data, error } = await supabase
-    .from("users")
-    .insert([{ balance: 100000 }])
-    .select()
-    .single();
-
-  if (error) {
-    return res.status(500).json({ success: false, message: "Failed to create user" });
-  }
-
-  res.json({ success: true, data });
-});
-
-/**
- * GET /api/user/:id
- * Returns user profile with balance.
+ * GET /api/user/profile
+ * Returns user profile with wallet balance (uses JWT user ID).
  */
 const getUser = asyncHandler(async (req, res) => {
-  const { data, error } = await supabase
-    .from("users")
-    .select("*")
-    .eq("id", req.params.id)
-    .single();
+  const userId = req.user.id;
 
-  if (error || !data) {
+  const users = await query(
+    "SELECT id, username, email, created_at FROM users WHERE id = ?",
+    [userId]
+  );
+
+  if (users.length === 0) {
     return res.status(404).json({ success: false, message: "User not found" });
   }
 
-  res.json({ success: true, data });
+  const wallets = await query(
+    "SELECT balance FROM wallets WHERE user_id = ?",
+    [userId]
+  );
+
+  const balance = wallets.length > 0 ? parseFloat(wallets[0].balance) : 0;
+
+  res.json({
+    success: true,
+    data: {
+      ...users[0],
+      balance,
+    },
+  });
 });
 
-module.exports = { createUser, getUser };
+/**
+ * GET /api/user/wallet
+ * Returns wallet details and recent transactions.
+ */
+const getWallet = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+
+  const wallets = await query(
+    "SELECT balance, updated_at FROM wallets WHERE user_id = ?",
+    [userId]
+  );
+
+  if (wallets.length === 0) {
+    return res
+      .status(404)
+      .json({ success: false, message: "Wallet not found" });
+  }
+
+  const transactions = await query(
+    "SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 20",
+    [userId]
+  );
+
+  res.json({
+    success: true,
+    data: {
+      balance: parseFloat(wallets[0].balance),
+      updated_at: wallets[0].updated_at,
+      recentTransactions: transactions,
+    },
+  });
+});
+
+module.exports = { getUser, getWallet };
