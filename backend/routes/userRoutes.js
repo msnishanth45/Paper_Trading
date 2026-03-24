@@ -1,9 +1,15 @@
 const express = require("express");
-const { createUser, getUser } = require("../controllers/userController");
-
 const router = express.Router();
+const { getUser, getWallet } = require("../controllers/userController");
+const { authenticate } = require("../middleware/auth");
 
-router.post("/create-user", createUser);
-router.get("/user/:id", getUser);
+// All user routes are protected
+router.use(authenticate);
+
+// GET /api/user/profile
+router.get("/profile", getUser);
+
+// GET /api/user/wallet
+router.get("/wallet", getWallet);
 
 module.exports = router;

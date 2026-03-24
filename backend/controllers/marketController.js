@@ -1,11 +1,15 @@
-const { getMarketInfo } = require("../utils/marketStatus");
+const { isMarketOpen } = require("../utils/marketStatus");
 const asyncHandler = require("../utils/asyncHandler");
 
 /**
- * GET /api/market-status
+ * GET /api/market/status
  */
 const getMarketStatus = asyncHandler(async (req, res) => {
-  res.json(getMarketInfo());
+  res.json({
+    success: true,
+    isOpen: isMarketOpen(),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 module.exports = { getMarketStatus };

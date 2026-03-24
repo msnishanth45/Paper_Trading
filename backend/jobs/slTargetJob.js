@@ -1,7 +1,8 @@
-const supabase = require("../config/supabase");
+const { query } = require("../db/mysql");
 const priceCache = require("../utils/priceCache");
 const { isMarketOpen } = require("../utils/marketStatus");
 const logger = require("../utils/logger");
+const socketService = require("../services/socketService");
 
 let intervalId = null;
 
@@ -17,12 +18,11 @@ function startSlTargetJob(intervalMs = 1500) {
     try {
       if (!isMarketOpen()) return;
 
-      const { data: openPositions, error } = await supabase
-        .from("positions")
-        .select("*")
-        .eq("status", "OPEN");
+      const openPositions = await query(
+        "SELECT * FROM positions WHERE status = 'OPEN'"
+      );
 
-      if (error || !openPositions || openPositions.length === 0) return;
+      if (!openPositions || openPositions.length === 0) return;
 
       for (const pos of openPositions) {
         const price = priceCache.get(pos.symbol);
@@ -30,55 +30,65 @@ function startSlTargetJob(intervalMs = 1500) {
 
         let exitReason = null;
 
-        if (pos.target && price >= pos.target) {
+        if (pos.target && price >= parseFloat(pos.target)) {
           exitReason = "TARGET_HIT";
-        } else if (pos.stoploss && price <= pos.stoploss) {
+        } else if (pos.stoploss && price <= parseFloat(pos.stoploss)) {
           exitReason = "STOPLOSS_HIT";
         }
 
         if (!exitReason) continue;
 
-        logger.trade(`${exitReason}: ${pos.symbol} @ ${price} (entry: ${pos.avg_price})`);
+        logger.trade(
+          `${exitReason}: ${pos.symbol} @ ${price} (entry: ${pos.avg_price})`
+        );
 
         // 1. Close position
-        await supabase
-          .from("positions")
-          .update({ status: "CLOSED" })
-          .eq("id", pos.id);
+        await query("UPDATE positions SET status = 'CLOSED' WHERE id = ?", [
+          pos.id,
+        ]);
 
         // 2. Calculate PnL & return proceeds
-        const pnl = (price - pos.avg_price) * pos.qty;
+        const avgPrice = parseFloat(pos.avg_price);
+        const pnl = (price - avgPrice) * pos.qty;
         const proceeds = price * pos.qty;
 
-        const { data: user } = await supabase
-          .from("users")
-          .select("balance")
-          .eq("id", pos.user_id)
-          .single();
+        // 3. Update wallet
+        await query(
+          "UPDATE wallets SET balance = balance + ? WHERE user_id = ?",
+          [proceeds, pos.user_id]
+        );
 
-        if (user) {
-          await supabase
-            .from("users")
-            .update({ balance: user.balance + proceeds })
-            .eq("id", pos.user_id);
-        }
+        // 4. Insert trade record
+        await query(
+          `INSERT INTO trades (user_id, symbol, qty, entry_price, exit_price, pnl, side, exit_reason, instrument_key, option_type, strike, expiry)
+           VALUES (?, ?, ?, ?, ?, ?, 'BUY', ?, ?, ?, ?, ?)`,
+          [pos.user_id, pos.symbol, pos.qty, avgPrice, price, pnl, exitReason, pos.instrument_key, pos.option_type, pos.strike, pos.expiry]
+        );
 
-        // 3. Insert trade record
-        await supabase.from("trades").insert([
-          {
-            user_id: pos.user_id,
-            symbol: pos.symbol,
-            qty: pos.qty,
-            entry_price: pos.avg_price,
-            exit_price: price,
-            pnl,
-            side: "BUY",
-          },
-        ]);
+        // 5. Record transaction
+        await query(
+          "INSERT INTO transactions (user_id, type, amount, description) VALUES (?, ?, ?, ?)",
+          [
+            pos.user_id,
+            exitReason,
+            proceeds,
+            `${exitReason} ${pos.symbol} x${pos.qty} @ ${price} | PnL: ${pnl.toFixed(2)}`,
+          ]
+        );
 
         logger.success(
           `Auto-closed ${pos.symbol} | Reason: ${exitReason} | PnL: ${pnl.toFixed(2)}`
         );
+
+        // 6. Emit order update via Socket.IO
+        socketService.emitOrderUpdate(pos.user_id, {
+          type: exitReason,
+          symbol: pos.symbol,
+          qty: pos.qty,
+          exitPrice: price,
+          pnl,
+          positionId: pos.id,
+        });
       }
     } catch (err) {
       logger.error("SL/Target job error:", err.message);

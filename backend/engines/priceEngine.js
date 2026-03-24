@@ -32,7 +32,7 @@ let reconnectAttempts = 0;
 let priceEmitTimer = null;
 
 const MAX_RECONNECT_DELAY = 60000;
-const PRICE_EMIT_INTERVAL = 500; // emit to Socket.IO every 500ms
+const PRICE_EMIT_INTERVAL = 100; // emit to Socket.IO every 100ms for <300ms propagation delay
 
 /* Resolved instrument maps (populated on start) */
 let SYMBOL_MAP = {};
@@ -135,6 +135,31 @@ function getStatus() {
     socketClients: socketService.getConnectedCount(),
     feedStatus: priceCache.getFeedStatus(),
   };
+}
+
+/**
+ * Dynamically subscribe to new instrument keys (e.g. for Option Chains)
+ */
+function addSubscription(keys, mapping = {}) {
+  // mapping is { [symbol]: instrumentKey }
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  
+  const newKeys = keys.filter(k => !INSTRUMENT_KEYS.includes(k));
+  if (newKeys.length === 0) return;
+
+  INSTRUMENT_KEYS.push(...newKeys);
+  Object.assign(SYMBOL_MAP, mapping);
+  for (const [sym, key] of Object.entries(mapping)) {
+    INSTRUMENT_TO_SYMBOL[key] = sym;
+  }
+
+  const subscribeMsg = {
+    guid: `add-sub-${Date.now()}`,
+    method: "sub",
+    data: { mode: "full", instrumentKeys: newKeys },
+  };
+  ws.send(JSON.stringify(subscribeMsg));
+  logger.feed(`[ENGINE] Dynamically subscribed to ${newKeys.length} new instruments`);
 }
 
 /* ── Internals ── */
@@ -419,4 +444,4 @@ function startPriceEmitter() {
   }, PRICE_EMIT_INTERVAL);
 }
 
-module.exports = { start, stop, setToken, getToken, getStatus, SYMBOL_MAP };
+module.exports = { start, stop, setToken, getToken, getStatus, addSubscription, SYMBOL_MAP };

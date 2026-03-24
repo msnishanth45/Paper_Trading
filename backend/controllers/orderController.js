@@ -1,75 +1,112 @@
 const { executeBuy, executeSell } = require("../services/orderService");
+const { query } = require("../db/mysql");
 const asyncHandler = require("../utils/asyncHandler");
 
 /**
- * POST /api/buy
- * Body: { user_id, symbol, qty, target?, stoploss? }
+ * POST /api/orders/buy
+ * Body: { symbol, qty, target?, stoploss? }
+ * User ID from JWT (req.user.id)
  */
 const buyOrder = asyncHandler(async (req, res) => {
-  const { user_id, symbol, qty, target, stoploss } = req.body;
+  const userId = req.user.id;
+  const { symbol, qty, target, stoploss, instrument_key, option_type, strike, expiry } = req.body;
 
-  if (!user_id || !symbol || !qty) {
-    return res.status(400).json({ success: false, message: "user_id, symbol, and qty are required" });
+  if (!symbol || !qty) {
+    return res
+      .status(400)
+      .json({ success: false, message: "symbol and qty are required" });
   }
 
-  const result = await executeBuy(user_id, symbol.toUpperCase(), qty, target, stoploss);
+  const result = await executeBuy(
+    userId,
+    symbol.toUpperCase(),
+    qty,
+    target,
+    stoploss,
+    instrument_key,
+    option_type,
+    strike,
+    expiry
+  );
   const status = result.success ? 200 : 400;
   res.status(status).json(result);
 });
 
 /**
- * POST /api/sell
- * Body: { user_id, position_id }
+ * POST /api/orders/sell
+ * Body: { position_id }
+ * User ID from JWT (req.user.id)
  */
 const sellOrder = asyncHandler(async (req, res) => {
-  const { user_id, position_id } = req.body;
+  const { position_id } = req.body;
+  const userId = req.user.id;
 
-  if (!user_id || !position_id) {
-    return res.status(400).json({ success: false, message: "user_id and position_id are required" });
+  if (!position_id) {
+    return res
+      .status(400)
+      .json({ success: false, message: "position_id is required" });
   }
 
-  const result = await executeSell(user_id, position_id);
+  const result = await executeSell(userId, position_id);
   const status = result.success ? 200 : 400;
   res.status(status).json(result);
 });
 
-const supabase = require("../config/supabase");
+/**
+ * GET /api/orders/open
+ * Returns all open positions for the authenticated user.
+ */
+const getOpenPositions = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
 
-const getOpenPositions = async (req, res) => {
+  const positions = await query(
+    "SELECT * FROM positions WHERE user_id = ? AND status = 'OPEN' ORDER BY created_at DESC",
+    [userId]
+  );
 
-  try {
+  res.json({
+    success: true,
+    positions,
+  });
+});
 
-    const { userId } = req.params;
+/**
+ * PATCH /api/orders/:id
+ * Updates target and/or stoploss for an open position/order.
+ */
+const modifyOrder = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { target, stoploss } = req.body;
+  const userId = req.user.id;
 
-    const { data, error } = await supabase
-      .from("positions")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("status", "OPEN");
+  // Verify the position belongs to the user and is OPEN
+  const positions = await query(
+    "SELECT * FROM positions WHERE id = ? AND user_id = ? AND status = 'OPEN'",
+    [id, userId]
+  );
 
-    if (error) {
-      return res.json({
-        success: false,
-        message: error.message
-      });
-    }
-
-    res.json({
-      success: true,
-      positions: data
-    });
-
-  } catch (err) {
-
-    res.json({
+  if (positions.length === 0) {
+    return res.status(404).json({
       success: false,
-      message: "Server error"
+      message: "Open position not found or not editable",
     });
-
   }
 
-};
+  // Update position
+  await query(
+    "UPDATE positions SET target = ?, stoploss = ? WHERE id = ?",
+    [target || null, stoploss || null, id]
+  );
 
-module.exports.getOpenPositions = getOpenPositions;
+  res.json({
+    success: true,
+    message: "Order parameters updated successfully",
+    data: {
+      id,
+      target: target || null,
+      stoploss: stoploss || null,
+    },
+  });
+});
 
-module.exports = { buyOrder, sellOrder, getOpenPositions};
+module.exports = { buyOrder, sellOrder, getOpenPositions, modifyOrder };

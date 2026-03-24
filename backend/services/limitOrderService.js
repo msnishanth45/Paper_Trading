@@ -1,4 +1,4 @@
-const supabase = require("../config/supabase");
+const { query } = require("../db/mysql");
 const priceCache = require("../utils/priceCache");
 const { isMarketOpen } = require("../utils/marketStatus");
 const { executeBuy } = require("./orderService");
@@ -7,59 +7,75 @@ const logger = require("../utils/logger");
 /**
  * Place a new limit order (stored as PENDING in DB).
  */
-async function placeLimitOrder(userId, symbol, qty, limitPrice, side = "BUY", target = null, stoploss = null) {
+async function placeLimitOrder(
+  userId,
+  symbol,
+  qty,
+  limitPrice,
+  side = "BUY",
+  target = null,
+  stoploss = null,
+  instrument_key = null,
+  option_type = null,
+  strike = null,
+  expiry = null
+) {
   if (!isMarketOpen()) {
     return { success: false, message: "Market is closed" };
   }
 
-  // Validate user exists
-  const { data: user, error: userErr } = await supabase
-    .from("users")
-    .select("id, balance")
-    .eq("id", userId)
-    .single();
+  // Validate user wallet exists
+  const wallets = await query("SELECT balance FROM wallets WHERE user_id = ?", [
+    userId,
+  ]);
 
-  if (userErr || !user) {
-    return { success: false, message: "User not found" };
+  if (wallets.length === 0) {
+    return { success: false, message: "User wallet not found" };
   }
 
   // For BUY limit orders, check if user has enough balance
   if (side === "BUY") {
     const cost = limitPrice * qty;
-    if (user.balance < cost) {
-      return { success: false, message: "Insufficient balance for limit order" };
+    if (parseFloat(wallets[0].balance) < cost) {
+      return {
+        success: false,
+        message: "Insufficient balance for limit order",
+      };
     }
   }
 
-  const { data: order, error: orderErr } = await supabase
-    .from("pending_orders")
-    .insert([
-      {
+  try {
+    const result = await query(
+      `INSERT INTO orders (user_id, symbol, qty, limit_price, side, target, stoploss, status, instrument_key, option_type, strike, expiry)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)`,
+      [userId, symbol, qty, limitPrice, side, target || null, stoploss || null, instrument_key || null, option_type || null, strike || null, expiry || null]
+    );
+
+    const orderId = result.insertId;
+
+    logger.trade(
+      `LIMIT ${side} ${symbol} x${qty} @ ${limitPrice} placed for user ${userId}`
+    );
+
+    return {
+      success: true,
+      message: "Limit order placed",
+      data: {
+        id: orderId,
         user_id: userId,
         symbol,
         qty,
         limit_price: limitPrice,
         side,
-        target: target || null,
-        stoploss: stoploss || null,
+        target,
+        stoploss,
         status: "PENDING",
       },
-    ])
-    .select()
-    .single();
-
-  if (orderErr) {
-    logger.error("Limit order insert failed:", orderErr.message);
+    };
+  } catch (err) {
+    logger.error("Limit order insert failed:", err.message);
     return { success: false, message: "Failed to place limit order" };
   }
-
-  logger.trade(`LIMIT ${side} ${symbol} x${qty} @ ${limitPrice} placed for user ${userId}`);
-
-  return {
-    success: true,
-    message: "Limit order placed",
-    data: order,
-  };
 }
 
 /**
@@ -68,12 +84,9 @@ async function placeLimitOrder(userId, symbol, qty, limitPrice, side = "BUY", ta
 async function matchPendingOrders() {
   if (!isMarketOpen()) return;
 
-  const { data: orders, error } = await supabase
-    .from("pending_orders")
-    .select("*")
-    .eq("status", "PENDING");
+  const orders = await query("SELECT * FROM orders WHERE status = 'PENDING'");
 
-  if (error || !orders || orders.length === 0) return;
+  if (!orders || orders.length === 0) return;
 
   for (const order of orders) {
     const ltp = priceCache.get(order.symbol);
@@ -81,30 +94,38 @@ async function matchPendingOrders() {
 
     let shouldExecute = false;
 
-    if (order.side === "BUY" && ltp <= order.limit_price) {
+    if (order.side === "BUY" && ltp <= parseFloat(order.limit_price)) {
       shouldExecute = true;
-    } else if (order.side === "SELL" && ltp >= order.limit_price) {
+    } else if (
+      order.side === "SELL" &&
+      ltp >= parseFloat(order.limit_price)
+    ) {
       shouldExecute = true;
     }
 
     if (!shouldExecute) continue;
 
-    logger.trade(`LIMIT ORDER TRIGGERED: ${order.side} ${order.symbol} x${order.qty} @ LTP ${ltp}`);
+    logger.trade(
+      `LIMIT ORDER TRIGGERED: ${order.side} ${order.symbol} x${order.qty} @ LTP ${ltp}`
+    );
 
     if (order.side === "BUY") {
       const result = await executeBuy(
         order.user_id,
         order.symbol,
         order.qty,
-        order.target,
-        order.stoploss
+        order.target ? parseFloat(order.target) : null,
+        order.stoploss ? parseFloat(order.stoploss) : null,
+        order.instrument_key,
+        order.option_type,
+        order.strike,
+        order.expiry
       );
 
       if (result.success) {
-        await supabase
-          .from("pending_orders")
-          .update({ status: "EXECUTED" })
-          .eq("id", order.id);
+        await query("UPDATE orders SET status = 'EXECUTED' WHERE id = ?", [
+          order.id,
+        ]);
         logger.success(`Limit order ${order.id} executed`);
       } else {
         logger.warn(`Limit order ${order.id} failed: ${result.message}`);
@@ -118,17 +139,15 @@ async function matchPendingOrders() {
  * Get pending orders for a user.
  */
 async function getUserPendingOrders(userId) {
-  const { data, error } = await supabase
-    .from("pending_orders")
-    .select("*")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false });
-
-  if (error) {
+  try {
+    const data = await query(
+      "SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC",
+      [userId]
+    );
+    return { success: true, data };
+  } catch (err) {
     return { success: false, message: "Failed to fetch orders" };
   }
-
-  return { success: true, data };
 }
 
 module.exports = { placeLimitOrder, matchPendingOrders, getUserPendingOrders };

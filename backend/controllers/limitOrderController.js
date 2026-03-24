@@ -2,27 +2,33 @@ const { placeLimitOrder, getUserPendingOrders } = require("../services/limitOrde
 const asyncHandler = require("../utils/asyncHandler");
 
 /**
- * POST /api/limit-order
- * Body: { user_id, symbol, qty, limit_price, side?, target?, stoploss? }
+ * POST /api/orders/limit
+ * Body: { symbol, qty, limit_price, side?, target?, stoploss? }
+ * User ID from JWT (req.user.id)
  */
 const createLimitOrder = asyncHandler(async (req, res) => {
-  const { user_id, symbol, qty, limit_price, side, target, stoploss } = req.body;
+  const userId = req.user.id;
+  const { symbol, qty, limit_price, side, target, stoploss, instrument_key, option_type, strike, expiry } = req.body;
 
-  if (!user_id || !symbol || !qty || !limit_price) {
+  if (!symbol || !qty || !limit_price) {
     return res.status(400).json({
       success: false,
-      message: "user_id, symbol, qty, and limit_price are required",
+      message: "symbol, qty, and limit_price are required",
     });
   }
 
   const result = await placeLimitOrder(
-    user_id,
+    userId,
     symbol.toUpperCase(),
     qty,
     limit_price,
     side || "BUY",
     target,
-    stoploss
+    stoploss,
+    instrument_key,
+    option_type,
+    strike,
+    expiry
   );
 
   const status = result.success ? 200 : 400;
@@ -30,10 +36,11 @@ const createLimitOrder = asyncHandler(async (req, res) => {
 });
 
 /**
- * GET /api/limit-orders/:userId
+ * GET /api/orders/pending
+ * User ID from JWT (req.user.id)
  */
 const getLimitOrders = asyncHandler(async (req, res) => {
-  const result = await getUserPendingOrders(req.params.userId);
+  const result = await getUserPendingOrders(req.user.id);
   res.json(result);
 });
 
