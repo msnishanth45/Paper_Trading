@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import AuthGuard from "../../components/AuthGuard";
 import Navbar from "../../components/Navbar";
 import PriceCard from "../../components/PriceCard";
@@ -37,6 +37,10 @@ export default function Dashboard() {
   // Selected state for Buy Form
   const [selectedSymbol, setSelectedSymbol] = useState("NIFTY");
   const [selectedOption, setSelectedOption] = useState<any>(null); // To hold CE/PE selection
+
+  const handleSelectOption = useCallback((opt: any) => {
+    setSelectedOption(opt);
+  }, []);
 
   const fetchPortfolio = async () => {
     try {
@@ -139,7 +143,7 @@ export default function Dashboard() {
           <div className="h-[400px]">
              <OptionChain 
                 symbol={selectedSymbol} 
-                onSelectOption={(opt) => setSelectedOption(opt)} 
+                onSelectOption={handleSelectOption} 
              />
           </div>
 
@@ -154,12 +158,12 @@ export default function Dashboard() {
               
               <PositionsTable
                 // Inject real-time Ltp directly from socket feed manually for table row coloring if needed
-                positions={portfolio.positions.map(p => ({
+                positions={useMemo(() => portfolio.positions.map(p => ({
                   ...p,
                   ltp: prices[p.symbol] || p.avg_price,
                   currentValue: (prices[p.symbol] || p.avg_price) * p.qty,
                   unrealizedPnL: ((prices[p.symbol] || p.avg_price) - p.avg_price) * p.qty
-                }))}
+                })), [portfolio.positions, prices])}
                 loading={loading}
                 onSell={handleSell}
                 onModify={handleModify}

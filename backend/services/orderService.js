@@ -3,13 +3,28 @@ const priceCache = require("../utils/priceCache");
 const { isMarketOpen } = require("../utils/marketStatus");
 const logger = require("../utils/logger");
 const socketService = require("./socketService");
+const executionQueue = require("./executionQueue");
+
+/**
+ * Validates if the feed is stale (older than 3 seconds)
+ */
+function isPriceStale() {
+  const feedStatus = priceCache.getFeedStatus();
+  if (!feedStatus.lastTickTimeAny) return true;
+  return (Date.now() - feedStatus.lastTickTimeAny) > 3000;
+}
 
 /**
  * Execute a BUY market order.
  */
-async function executeBuy(userId, symbol, qty, target = null, stoploss = null, instrument_key = null, option_type = null, strike = null, expiry = null, trailing_sl = null) {
+async function _executeBuy(userId, symbol, qty, target = null, stoploss = null, instrument_key = null, option_type = null, strike = null, expiry = null, trailing_sl = null) {
   if (!isMarketOpen()) {
     return { success: false, message: "Market is closed" };
+  }
+
+  // Stale price guard (Phase 7)
+  if (isPriceStale()) {
+    return { success: false, message: "Order rejected: Stale market data (>3s since last tick)" };
   }
 
   // Price safety guard
@@ -95,12 +110,28 @@ async function executeBuy(userId, symbol, qty, target = null, stoploss = null, i
   }
 }
 
+async function executeBuy(userId, symbol, qty, target = null, stoploss = null, instrument_key = null, option_type = null, strike = null, expiry = null, trailing_sl = null) {
+  const lockKey = `user_${userId}`;
+  const taskName = `BUY_${symbol}_x${qty}`;
+  return executionQueue.enqueue(
+    lockKey, 
+    taskName, 
+    () => _executeBuy(userId, symbol, qty, target, stoploss, instrument_key, option_type, strike, expiry, trailing_sl),
+    0 // No retries for market entry to prevent double spending / lag buys
+  );
+}
+
 /**
  * Execute a SELL — close an existing open position (full or partial).
  */
-async function executeSell(userId, positionId, exitQty = null) {
+async function _executeSell(userId, positionId, exitQty = null) {
   if (!isMarketOpen()) {
     return { success: false, message: "Market is closed" };
+  }
+
+  // Stale price guard (Phase 7)
+  if (isPriceStale()) {
+    return { success: false, message: "Order rejected: Stale market data (>3s since last tick)" };
   }
 
   const positions = await query(
@@ -189,6 +220,17 @@ async function executeSell(userId, positionId, exitQty = null) {
     message: isPartialExit ? "Partial exit executed" : "SELL executed",
     data: { exitPrice, pnl: parseFloat(pnl.toFixed(2)), proceeds, partialExit: isPartialExit },
   };
+}
+
+async function executeSell(userId, positionId, exitQty = null) {
+  const lockKey = `pos_${positionId}`;
+  const taskName = `SELL_POS_${positionId}`;
+  return executionQueue.enqueue(
+    lockKey,
+    taskName,
+    () => _executeSell(userId, positionId, exitQty),
+    2 // Retry up to 2 times for DB deadlocks on exit
+  );
 }
 
 /**

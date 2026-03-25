@@ -17,6 +17,7 @@ const protobuf = require("protobufjs");
 const path = require("path");
 const logger = require("../utils/logger");
 const priceCache = require("../utils/priceCache");
+const { query } = require("../db/mysql");
 const { isMarketOpen } = require("../utils/marketStatus");
 const { resolveInstruments } = require("../services/instrumentResolver");
 const socketService = require("../services/socketService");
@@ -31,9 +32,10 @@ let reconnectTimer = null;
 let heartbeatTimer = null;
 let reconnectAttempts = 0;
 let priceEmitTimer = null;
+let globalTickCounter = 0;
 
 const MAX_RECONNECT_DELAY = 60000;
-const PRICE_EMIT_INTERVAL = 100;
+const PRICE_EMIT_INTERVAL = 50; // Phase 8: Batch tick updates (50ms buffer)
 
 /* Resolved instrument maps (populated on start) */
 let SYMBOL_MAP = {};
@@ -116,8 +118,22 @@ function stop() {
 }
 
 function getStatus() {
+  const feedStatus = priceCache.getFeedStatus();
+  let feedHealth = "DISCONNECTED";
+  
+  if (connectionState === "connected") {
+    const lastTickTime = feedStatus.lastTickTimeAny;
+    if (!lastTickTime) {
+      feedHealth = "DELAYED";
+    } else {
+      const msSinceLast = Date.now() - lastTickTime;
+      feedHealth = msSinceLast > 30000 ? "DELAYED" : "LIVE";
+    }
+  }
+
   return {
     connectionState,
+    feedHealth,
     connectedAt,
     accessTokenSet: !!accessToken,
     reconnectAttempts,
@@ -126,7 +142,7 @@ function getStatus() {
     optionChainKeyCount: OPTION_CHAIN_KEYS.length,
     instruments: SYMBOL_MAP,
     socketClients: socketService.getConnectedCount(),
-    feedStatus: priceCache.getFeedStatus(),
+    feedStatus,
   };
 }
 
@@ -242,10 +258,18 @@ async function connectFeed() {
   }
 
   connectionState = "connecting";
+  socketService.io.emit("feed_status_update", { status: "CONNECTING", attempt: reconnectAttempts });
 
   try {
-    // 1. Load snapshot LTP via REST
-    await loadSnapshot();
+    // Phase 7: Reload snapshot only after hard reconnect (failures >= 2) or initial connect
+    if (reconnectAttempts === 0 || reconnectAttempts >= 2) {
+      if (reconnectAttempts >= 2) {
+        logger.warn(`[ENGINE] Hard Reconnect triggered (attempt ${reconnectAttempts})`);
+      }
+      await loadSnapshot();
+    } else {
+      logger.debug(`[ENGINE] Soft Reconnect (attempt ${reconnectAttempts}) — skipping snapshot`);
+    }
 
     // 2. Authorize WS v3
     const authRes = await axios.get(
@@ -264,6 +288,7 @@ async function connectFeed() {
       connectedAt = new Date().toISOString();
       reconnectAttempts = 0;
       priceCache.setFeedConnected(true);
+      socketService.io.emit("feed_status_update", { status: "LIVE" });
 
       const subscribeMsg = {
         guid: "paper-trading-v3",
@@ -300,6 +325,21 @@ async function connectFeed() {
           const symbol = INSTRUMENT_TO_SYMBOL[key];
           if (symbol) {
             priceCache.set(symbol, price);
+            
+            // Phase 7: Tick Audit Logging (Every 3rd tick globally)
+            globalTickCounter++;
+            if (globalTickCounter % 3 === 0) {
+              // Approximate latency if feed provides timestamp, else 0
+              let latencyMs = 0;
+              if (feed.ff && feed.ff.exchangeTimeStamp) {
+                 latencyMs = Date.now() - Number(feed.ff.exchangeTimeStamp);
+              }
+              
+              query(
+                "INSERT INTO tick_logs (symbol, price, source, latency_ms) VALUES (?, ?, 'WS', ?)",
+                [symbol, price, latencyMs]
+              ).catch(err => logger.debug(`[ENGINE] DB tick log error: ${err.message}`));
+            }
           }
 
           // Extract OI if available
@@ -319,6 +359,7 @@ async function connectFeed() {
       logger.warn(`[ENGINE] WS closed (code: ${code}, reason: ${reason || "none"})`);
       connectionState = "disconnected";
       priceCache.setFeedConnected(false);
+      socketService.io.emit("feed_status_update", { status: "DISCONNECTED" });
       clearTimers();
       scheduleReconnect();
     });

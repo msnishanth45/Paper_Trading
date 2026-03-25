@@ -22,6 +22,7 @@ const cors = require("cors");
 const logger = require("./utils/logger");
 const socketService = require("./services/socketService");
 const { testConnection } = require("./db/mysql");
+const { fork } = require("child_process");
 
 /* ── Express App ── */
 
@@ -66,6 +67,9 @@ app.use("/api/user", require("./routes/userRoutes"));
 
 // Trades (protected)
 app.use("/api/trades", require("./routes/tradeRoutes"));
+
+// System APIs (protected)
+app.use("/api/system", require("./routes/systemRoutes"));
 
 /* ── Health Check ── */
 
@@ -176,13 +180,22 @@ httpServer.listen(PORT, async () => {
     await priceEngine.start();
   }
 
-  const { startSlTargetJob } = require("./jobs/slTargetJob");
-  const { startLimitOrderJob } = require("./jobs/limitOrderJob");
   const { startPnlJob } = require("./jobs/pnlJob");
   const feedHealthMonitor = require("./utils/feedHealthMonitor");
 
-  startSlTargetJob(SL_TARGET_INTERVAL);
-  startLimitOrderJob(LIMIT_ORDER_INTERVAL);
+  // Phase 8: Spawn Background Worker Process
+  const worker = fork(require("path").join(__dirname, "worker.js"));
+  logger.success("[SERVER] Background worker process spawned");
+
+  // Push prices to worker via IPC (since it runs on a separate Node isolate)
+  const priceCache = require("./utils/priceCache");
+  setInterval(() => {
+    const prices = priceCache.getAll();
+    if (Object.keys(prices).length > 0) {
+      worker.send({ type: "PRICE_UPDATE", prices });
+    }
+  }, 100);
+
   startPnlJob(1000); // 1-second interval for PnL UI feedback
   feedHealthMonitor.start(10000); // Check every 10s
 
@@ -195,14 +208,10 @@ function shutdown(signal) {
   logger.info(`${signal} received — shutting down gracefully`);
 
   const priceEngine = require("./engines/priceEngine");
-  const { stopSlTargetJob } = require("./jobs/slTargetJob");
-  const { stopLimitOrderJob } = require("./jobs/limitOrderJob");
   const { stopPnlJob } = require("./jobs/pnlJob");
   const feedHealthMonitor = require("./utils/feedHealthMonitor");
 
   priceEngine.stop();
-  stopSlTargetJob();
-  stopLimitOrderJob();
   stopPnlJob();
   feedHealthMonitor.stop();
 

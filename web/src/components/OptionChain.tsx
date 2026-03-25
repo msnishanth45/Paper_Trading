@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, memo, useCallback } from "react";
 import { marketService } from "../services/marketService";
 
 interface OptionProps {
@@ -23,7 +23,95 @@ interface ComponentProps {
   onSelectOption: (option: OptionProps & { strike: number; optionType: string; underlying: string; action: 'BUY' | 'SELL' }) => void;
 }
 
-export default function OptionChain({ symbol, onSelectOption }: ComponentProps) {
+// Phase 8: Memoized Row for Frontend Performance
+const StrikeRowItem = memo(({ row, atmStrike, symbol, onSelectOption }: { row: StrikeRow, atmStrike: number, symbol: string, onSelectOption: any }) => {
+  const isATM = row.type === 'ATM';
+  const isCEITM = row.type === 'ITM_CE' || row.strike < atmStrike;
+  const isPEITM = row.type === 'ITM_PE' || row.strike > atmStrike;
+  
+  return (
+    <tr className={`hover:bg-slate-800/50 transition-colors group ${isATM ? 'relative z-0' : ''}`}>
+      {/* CALLS */}
+      <td className={`px-2 py-1 border-r border-slate-800 ${isCEITM ? 'bg-green-900/20' : 'bg-slate-900/30'}`}>
+        {row.CE ? (
+          <div className="flex justify-between items-center w-full px-2">
+            <div className="flex flex-col items-start">
+              <span className="text-green-400 font-medium font-mono">
+                {row.CE.ltp ? row.CE.ltp.toFixed(2) : '-'}
+              </span>
+              <span className="text-slate-500 text-[10px]" title="Open Interest">
+                OI: {row.CE.oi ?? '-'}
+              </span>
+            </div>
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+              <button
+                onClick={() => onSelectOption({ ...row.CE!, strike: row.strike, optionType: 'CE', underlying: symbol, action: 'BUY' })}
+                className="px-2 py-1 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+              >
+                B
+              </button>
+              <button
+                onClick={() => onSelectOption({ ...row.CE!, strike: row.strike, optionType: 'CE', underlying: symbol, action: 'SELL' })}
+                className="px-2 py-1 text-xs font-bold bg-red-600 hover:bg-red-500 text-white rounded transition-colors"
+              >
+                S
+              </button>
+            </div>
+          </div>
+        ) : <span className="text-slate-600 block text-center">-</span>}
+      </td>
+      
+      {/* STRIKE */}
+      <td className={`px-2 py-2 font-bold font-mono border-x border-slate-800 relative
+        ${isATM ? 'bg-blue-600/20 text-blue-300 shadow-[inset_0_0_15px_rgba(59,130,246,0.3)]' : 'bg-slate-900 text-slate-300'}`}>
+        {isATM && (
+          <div className="absolute inset-0 border-y border-blue-500/50 pointer-events-none" />
+        )}
+        {row.strike}
+      </td>
+      
+      {/* PUTS */}
+      <td className={`px-2 py-1 border-l border-slate-800 ${isPEITM ? 'bg-red-900/20' : 'bg-slate-900/30'}`}>
+        {row.PE ? (
+          <div className="flex justify-between items-center w-full px-2">
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+              <button
+                onClick={() => onSelectOption({ ...row.PE!, strike: row.strike, optionType: 'PE', underlying: symbol, action: 'BUY' })}
+                className="px-2 py-1 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+              >
+                B
+              </button>
+              <button
+                onClick={() => onSelectOption({ ...row.PE!, strike: row.strike, optionType: 'PE', underlying: symbol, action: 'SELL' })}
+                className="px-2 py-1 text-xs font-bold bg-red-600 hover:bg-red-500 text-white rounded transition-colors"
+              >
+                S
+              </button>
+            </div>
+            <div className="flex flex-col items-end">
+              <span className="text-red-400 font-medium font-mono">
+                {row.PE.ltp ? row.PE.ltp.toFixed(2) : '-'}
+              </span>
+              <span className="text-slate-500 text-[10px]" title="Open Interest">
+                OI: {row.PE.oi ?? '-'}
+              </span>
+            </div>
+          </div>
+        ) : <span className="text-slate-600 block text-center">-</span>}
+      </td>
+    </tr>
+  );
+}, (prevProps, nextProps) => {
+  // Custom memo comparison to avoid rerenders if LTP & OI hasn't changed
+  if (prevProps.atmStrike !== nextProps.atmStrike) return false;
+  if (prevProps.row.CE?.ltp !== nextProps.row.CE?.ltp) return false;
+  if (prevProps.row.PE?.ltp !== nextProps.row.PE?.ltp) return false;
+  if (prevProps.row.CE?.oi !== nextProps.row.CE?.oi) return false;
+  if (prevProps.row.PE?.oi !== nextProps.row.PE?.oi) return false;
+  return true;
+});
+
+const OptionChain = memo(function OptionChain({ symbol, onSelectOption }: ComponentProps) {
   const [chain, setChain] = useState<StrikeRow[]>([]);
   const [underlyingLtp, setUnderlyingLtp] = useState<number>(0);
   const [atmStrike, setAtmStrike] = useState<number>(0);
@@ -130,88 +218,21 @@ export default function OptionChain({ symbol, onSelectOption }: ComponentProps) 
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/50">
-              {chain.map((row) => {
-                const isATM = row.type === 'ATM';
-                const isCEITM = row.type === 'ITM_CE' || row.strike < atmStrike;
-                const isPEITM = row.type === 'ITM_PE' || row.strike > atmStrike;
-                
-                return (
-                  <tr key={row.strike} className={`hover:bg-slate-800/50 transition-colors group ${isATM ? 'relative z-0' : ''}`}>
-                    {/* CALLS */}
-                    <td className={`px-2 py-1 border-r border-slate-800 ${isCEITM ? 'bg-green-900/20' : 'bg-slate-900/30'}`}>
-                      {row.CE ? (
-                        <div className="flex justify-between items-center w-full px-2">
-                          <div className="flex flex-col items-start">
-                            <span className="text-green-400 font-medium font-mono">
-                              {row.CE.ltp ? row.CE.ltp.toFixed(2) : '-'}
-                            </span>
-                            <span className="text-slate-500 text-[10px]" title="Open Interest">
-                              OI: {row.CE.oi ?? '-'}
-                            </span>
-                          </div>
-                          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                            <button
-                              onClick={() => onSelectOption({ ...row.CE!, strike: row.strike, optionType: 'CE', underlying: symbol, action: 'BUY' })}
-                              className="px-2 py-1 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
-                            >
-                              B
-                            </button>
-                            <button
-                              onClick={() => onSelectOption({ ...row.CE!, strike: row.strike, optionType: 'CE', underlying: symbol, action: 'SELL' })}
-                              className="px-2 py-1 text-xs font-bold bg-red-600 hover:bg-red-500 text-white rounded transition-colors"
-                            >
-                              S
-                            </button>
-                          </div>
-                        </div>
-                      ) : <span className="text-slate-600 block text-center">-</span>}
-                    </td>
-                    
-                    {/* STRIKE */}
-                    <td className={`px-2 py-2 font-bold font-mono border-x border-slate-800 relative
-                      ${isATM ? 'bg-blue-600/20 text-blue-300 shadow-[inset_0_0_15px_rgba(59,130,246,0.3)]' : 'bg-slate-900 text-slate-300'}`}>
-                      {isATM && (
-                        <div className="absolute inset-0 border-y border-blue-500/50 pointer-events-none" />
-                      )}
-                      {row.strike}
-                    </td>
-                    
-                    {/* PUTS */}
-                    <td className={`px-2 py-1 border-l border-slate-800 ${isPEITM ? 'bg-red-900/20' : 'bg-slate-900/30'}`}>
-                      {row.PE ? (
-                        <div className="flex justify-between items-center w-full px-2">
-                          <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                            <button
-                              onClick={() => onSelectOption({ ...row.PE!, strike: row.strike, optionType: 'PE', underlying: symbol, action: 'BUY' })}
-                              className="px-2 py-1 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
-                            >
-                              B
-                            </button>
-                            <button
-                              onClick={() => onSelectOption({ ...row.PE!, strike: row.strike, optionType: 'PE', underlying: symbol, action: 'SELL' })}
-                              className="px-2 py-1 text-xs font-bold bg-red-600 hover:bg-red-500 text-white rounded transition-colors"
-                            >
-                              S
-                            </button>
-                          </div>
-                          <div className="flex flex-col items-end">
-                            <span className="text-red-400 font-medium font-mono">
-                              {row.PE.ltp ? row.PE.ltp.toFixed(2) : '-'}
-                            </span>
-                            <span className="text-slate-500 text-[10px]" title="Open Interest">
-                              OI: {row.PE.oi ?? '-'}
-                            </span>
-                          </div>
-                        </div>
-                      ) : <span className="text-slate-600 block text-center">-</span>}
-                    </td>
-                  </tr>
-                );
-              })}
+              {chain.map((row) => (
+                <StrikeRowItem
+                  key={row.strike}
+                  row={row}
+                  atmStrike={atmStrike}
+                  symbol={symbol}
+                  onSelectOption={onSelectOption}
+                />
+              ))}
             </tbody>
           </table>
         </div>
       )}
     </div>
   );
-}
+});
+
+export default OptionChain;

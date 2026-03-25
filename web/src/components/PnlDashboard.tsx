@@ -1,4 +1,5 @@
 import { formatCurrency, formatNumber } from '../utils/formatters';
+import React, { memo } from "react";
 
 interface SummaryData {
   totalPnl: number;
@@ -19,7 +20,7 @@ interface Props {
   loading: boolean;
 }
 
-export default function PnlDashboard({ data, loading }: Props) {
+const PnlDashboard = memo(function PnlDashboard({ data, loading }: Props) {
   if (loading || !data) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 animate-pulse">
@@ -121,4 +122,6 @@ export default function PnlDashboard({ data, loading }: Props) {
       </div>
     </div>
   );
-}
+});
+
+export default PnlDashboard;

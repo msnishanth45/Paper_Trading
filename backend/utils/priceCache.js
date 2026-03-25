@@ -53,11 +53,11 @@ class PriceCache {
     this._timestamps.set(symbol, Date.now());
     this._totalTicks++;
 
-    // Fire-and-forget to Redis
+    // Phase 8: Redis Pub/Sub & 5-min TTL
     if (redisClient) {
-      redisClient
-        .hset("prices", symbol, JSON.stringify({ price, ts: Date.now() }))
-        .catch(() => {});
+      const payload = JSON.stringify({ price, ts: Date.now() });
+      redisClient.setex(`price:${symbol}`, 300, payload).catch(() => {});
+      redisClient.publish("price_updates", JSON.stringify({ symbol, price })).catch(() => {});
     }
   }
 
