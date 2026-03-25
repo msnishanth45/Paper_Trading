@@ -5,6 +5,9 @@
    management and in-memory caching.
    ═══════════════════════════════════════════════════ */
 
+const zlib = require("zlib");
+const fs = require("fs");
+const path = require("path");
 const axios = require("axios");
 const { parse } = require("csv-parse/sync");
 const logger = require("../utils/logger");
@@ -47,16 +50,24 @@ const FALLBACK_KEYS = {
 async function downloadInstruments() {
   let csvText = null;
 
-  // Try uncompressed first (simpler, no zlib needed)
-  for (const url of [INSTRUMENTS_URL_FALLBACK, INSTRUMENTS_URL]) {
+  // Try both compressed and uncompressed URLs
+  for (const url of [INSTRUMENTS_URL, INSTRUMENTS_URL_FALLBACK]) {
     try {
       logger.info(`[RESOLVER] Downloading instruments from: ${url}`);
       const res = await axios.get(url, {
-        timeout: 30000,
-        responseType: "text",
-        decompress: true,
+        timeout: 15000, // Reduced from 30s to cycle URLs faster
+        responseType: url.endsWith(".gz") ? "arraybuffer" : "text",
+        headers: {
+          "Accept-Encoding": "gzip, deflate, br",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
       });
-      csvText = res.data;
+      
+      if (url.endsWith(".gz")) {
+        csvText = zlib.gunzipSync(res.data).toString();
+      } else {
+        csvText = res.data;
+      }
       logger.success(`[RESOLVER] Downloaded instruments CSV (${csvText.length} chars)`);
       break;
     } catch (err) {
@@ -149,11 +160,27 @@ async function resolveInstruments() {
       }
     }
   } catch (err) {
-    logger.error(`[RESOLVER] CSV download failed, using fallbacks: ${err.message}`);
+    logger.error(`[RESOLVER] CSV download failed: ${err.message}`);
 
-    for (const [sym, key] of Object.entries(FALLBACK_KEYS)) {
-      symbolMap[sym] = key;
-      instrumentToSymbol[key] = sym;
+    // Try Fallback JSON
+    try {
+      const fallbackPath = path.join(__dirname, "..", "data", "instruments_fallback.json");
+      if (fs.existsSync(fallbackPath)) {
+        const fallbackData = JSON.parse(fs.readFileSync(fallbackPath, "utf8"));
+        Object.assign(symbolMap, fallbackData);
+        for (const [sym, key] of Object.entries(symbolMap)) {
+          instrumentToSymbol[key] = sym;
+        }
+        logger.info("[RESOLVER] Successfully loaded static instruments_fallback.json");
+      } else {
+        throw new Error("fallback JSON missing");
+      }
+    } catch (fallbackErr) {
+      logger.warn(`[RESOLVER] JSON fallback failed (${fallbackErr.message}), using hardcoded defaults`);
+      for (const [sym, key] of Object.entries(FALLBACK_KEYS)) {
+        symbolMap[sym] = key;
+        instrumentToSymbol[key] = sym;
+      }
     }
   }
 

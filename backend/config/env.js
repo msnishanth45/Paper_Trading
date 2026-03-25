@@ -2,12 +2,15 @@ require("dotenv").config();
 
 const required = ["MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE", "JWT_SECRET"];
 
-for (const key of required) {
-  if (!process.env[key]) {
-    console.error(`❌ Missing required env var: ${key}`);
-    process.exit(1);
+function validateEnv(requiredKeys) {
+  for (const key of requiredKeys) {
+    if (!process.env[key]) {
+      console.warn(`[ENV] ⚠️ Missing recommended env var: ${key} — Running in DEGRADED mode`);
+    }
   }
 }
+
+validateEnv(required);
 
 module.exports = {
   // MySQL

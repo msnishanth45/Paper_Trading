@@ -21,6 +21,7 @@ const { query } = require("../db/mysql");
 const { isMarketOpen } = require("../utils/marketStatus");
 const { resolveInstruments } = require("../services/instrumentResolver");
 const socketService = require("../services/socketService");
+const { emit } = require("../utils/socketEmitter");
 const { UPSTOX_ACCESS_TOKEN, HEARTBEAT_TIMEOUT_MS } = require("../config/env");
 
 /* ── State ── */
@@ -258,7 +259,7 @@ async function connectFeed() {
   }
 
   connectionState = "connecting";
-  socketService.io.emit("feed_status_update", { status: "CONNECTING", attempt: reconnectAttempts });
+  emit("feed_status_update", { status: "CONNECTING", attempt: reconnectAttempts });
 
   try {
     // Phase 7: Reload snapshot only after hard reconnect (failures >= 2) or initial connect
@@ -288,7 +289,7 @@ async function connectFeed() {
       connectedAt = new Date().toISOString();
       reconnectAttempts = 0;
       priceCache.setFeedConnected(true);
-      socketService.io.emit("feed_status_update", { status: "LIVE" });
+      emit("feed_status_update", { status: "LIVE" });
 
       const subscribeMsg = {
         guid: "paper-trading-v3",
@@ -359,7 +360,7 @@ async function connectFeed() {
       logger.warn(`[ENGINE] WS closed (code: ${code}, reason: ${reason || "none"})`);
       connectionState = "disconnected";
       priceCache.setFeedConnected(false);
-      socketService.io.emit("feed_status_update", { status: "DISCONNECTED" });
+      emit("feed_status_update", { status: "DISCONNECTED" });
       clearTimers();
       scheduleReconnect();
     });

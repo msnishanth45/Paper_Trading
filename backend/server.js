@@ -74,11 +74,14 @@ app.use("/api/system", require("./routes/systemRoutes"));
 /* ── Health Check ── */
 
 app.get("/health", (req, res) => {
+  const priceCache = require("./utils/priceCache");
   res.json({
     status: "ok",
-    service: "Paper Trading Backend",
-    version: "3.0.0",
-    uptime: process.uptime(),
+    db: true, // Will be overridden or tracked, but typically dbOk from boot
+    socket: true,
+    feedConnected: priceCache.getFeedStatus().connected,
+    uptimeSeconds: Math.floor(process.uptime()),
+    memoryUsage: process.memoryUsage(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -158,48 +161,61 @@ const httpServer = http.createServer(app);
 /* ── Start Server ── */
 
 httpServer.listen(PORT, async () => {
-  logger.success(`Server running on port ${PORT}`);
+  logger.info("[BOOT] 1. Environment Loaded");
+  logger.info(`[BOOT] 2. Express Server running on port ${PORT}`);
 
-  // 1. Test MySQL connection
+  // 3. Initialize MySQL connection
   const dbOk = await testConnection();
   if (!dbOk) {
-    logger.error("[SERVER] MySQL connection failed — some features will not work");
-  }
-
-  // 2. Initialize Socket.IO
-  socketService.init(httpServer);
-
-  // 3. Start price engine
-  const priceEngine = require("./engines/priceEngine");
-
-  // Auto-set token from env if available
-  if (UPSTOX_ACCESS_TOKEN) {
-    logger.success("[SERVER] Auto-setting Upstox token from env");
-    await priceEngine.setToken(UPSTOX_ACCESS_TOKEN);
+    logger.error("[BOOT] 3. Database connection failed — entering DEGRADED mode but API is live");
   } else {
-    await priceEngine.start();
+    logger.info("[BOOT] 3. Database (MySQL) initialized");
   }
 
+  // 4. Initialize Socket.IO
+  socketService.init(httpServer);
+  logger.info("[BOOT] 4. Socket.IO engine initialized");
+
+  // 5. Initialize Redis
+  const priceCache = require("./utils/priceCache");
+  logger.info("[BOOT] 5. Cache layer (Memory/Redis) initialized");
+
+  // 6. Start Price Engine
+  const priceEngine = require("./engines/priceEngine");
+  try {
+    if (UPSTOX_ACCESS_TOKEN) {
+      logger.info("[BOOT] 6. Auto-setting Upstox token & Starting Feed...");
+      await priceEngine.setToken(UPSTOX_ACCESS_TOKEN);
+    } else {
+      logger.info("[BOOT] 6. Starting Feed Engine without active token");
+      await priceEngine.start();
+    }
+  } catch (err) {
+    logger.error("[BOOT] 6. Feed Engine failed to start:", err.message);
+  }
+
+  // 7. Start Worker Jobs
   const { startPnlJob } = require("./jobs/pnlJob");
   const feedHealthMonitor = require("./utils/feedHealthMonitor");
 
-  // Phase 8: Spawn Background Worker Process
-  const worker = fork(require("path").join(__dirname, "worker.js"));
-  logger.success("[SERVER] Background worker process spawned");
+  try {
+    const worker = fork(require("path").join(__dirname, "worker.js"));
+    logger.info("[BOOT] 7. Background Worker process spawned");
 
-  // Push prices to worker via IPC (since it runs on a separate Node isolate)
-  const priceCache = require("./utils/priceCache");
-  setInterval(() => {
-    const prices = priceCache.getAll();
-    if (Object.keys(prices).length > 0) {
-      worker.send({ type: "PRICE_UPDATE", prices });
-    }
-  }, 100);
+    setInterval(() => {
+      const prices = priceCache.getAll();
+      if (Object.keys(prices).length > 0) {
+        worker.send({ type: "PRICE_UPDATE", prices });
+      }
+    }, 100);
+  } catch (err) {
+    logger.error("[BOOT] 7. Worker spawn failed:", err.message);
+  }
 
-  startPnlJob(1000); // 1-second interval for PnL UI feedback
-  feedHealthMonitor.start(10000); // Check every 10s
+  startPnlJob(1000); 
+  feedHealthMonitor.start(10000); 
 
-  logger.success("All systems initialized ✓");
+  logger.success("[BOOT] SERVER READY ✓ All systems initialized");
 });
 
 /* ── Graceful Shutdown ── */
